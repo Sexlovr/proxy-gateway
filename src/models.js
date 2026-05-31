@@ -88,6 +88,8 @@ async function fetchModelsFromProvider(provider, key) {
   var maxPages = 50;
 
   // Sandbox Override Logic
+  // Only apply sandbox overrides if the sandbox explicitly handles models
+  // (indicated by returning a response_parser). Chat-only sandbox code is ignored here.
   var sandboxResult = null;
   if (provider.sandbox_code) {
     var requestContext = {
@@ -96,10 +98,14 @@ async function fetchModelsFromProvider(provider, key) {
       original_model: '',
       stripped_model: '',
     };
-    sandboxResult = runSandboxCode(provider.sandbox_code, {}, {}, provider, requestContext);
-    if (sandboxResult.url) url = sandboxResult.url;
-    else if (sandboxResult.url_path) {
+    var rawSandbox = runSandboxCode(provider.sandbox_code, {}, {}, provider, requestContext);
+    // Only use sandbox result if it returned a response_parser (= intentionally handles models)
+    if (rawSandbox.response_parser) {
+      sandboxResult = rawSandbox;
+      if (sandboxResult.url) url = sandboxResult.url;
+      else if (sandboxResult.url_path) {
         url = provider.upstream_url + sandboxResult.url_path;
+      }
     }
   }
 
