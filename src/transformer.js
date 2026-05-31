@@ -124,7 +124,7 @@ export function injectKey(headers, key) {
     return result;
 }
 
-function buildDefaultHeaders(provider) {
+export function buildDefaultHeaders(provider) {
     var h = { 'content-type': 'application/json' };
     var authType = (provider.auth_type || 'bearer').toLowerCase();
     var authHeader = provider.auth_header || 'authorization';
