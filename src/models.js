@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { getAllProviders, getProvider, getCachedModels, setCachedModels, getAllCachedModels } from './storage.js';
 import { runSandboxCode } from './sandboxRunner.js';
-import { injectKey, buildDefaultHeaders } from './transformer.js';
+import { injectKey } from './transformer.js';
 
 export var modelsRouter = Router();
 
@@ -104,11 +104,24 @@ async function fetchModelsFromProvider(provider, key) {
   }
 
   while (url && page < maxPages) {
-    var headers = (sandboxResult && sandboxResult.headers) ? JSON.parse(JSON.stringify(sandboxResult.headers)) : buildDefaultHeaders(provider);
-    headers = injectKey(headers, key);
+    var headers = { 'content-type': 'application/json' };
+
+    if (sandboxResult && sandboxResult.headers) {
+      headers = JSON.parse(JSON.stringify(sandboxResult.headers));
+      if (key) headers = injectKey(headers, key);
+    } else if (key) {
+      var authType = (provider.auth_type || 'bearer').toLowerCase();
+      if (authType === 'bearer') {
+        headers['authorization'] = 'Bearer ' + key;
+      } else if (authType === 'x-api-key') {
+        headers['x-api-key'] = key;
+      } else {
+        headers[provider.auth_header || 'authorization'] = key;
+      }
+    }
 
     var resp = await fetch(url, {
-      method: sandboxResult?.method || 'GET',
+      method: (sandboxResult && sandboxResult.method) ? sandboxResult.method : 'GET',
       headers: headers,
       signal: AbortSignal.timeout(60000)
     });
