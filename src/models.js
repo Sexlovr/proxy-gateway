@@ -1,5 +1,7 @@
 import { Router } from 'express';
 import { getAllProviders, getProvider, getCachedModels, setCachedModels, getAllCachedModels } from './storage.js';
+import { runSandboxCode } from './sandboxRunner.js';
+import { injectKey, buildDefaultHeaders } from './transformer.js';
 
 export var modelsRouter = Router();
 
@@ -15,6 +17,7 @@ modelsRouter.post('/fetch/:prefix', async function(req, res) {
     setCachedModels(prefix, models);
     res.json({ prefix: prefix, count: models.length, models: models });
   } catch (e) {
+    console.error('[models] error for ' + prefix + ':', e.message);
     res.status(502).json({ error: e.message });
   }
 });
@@ -32,6 +35,7 @@ modelsRouter.post('/fetch', async function(req, res) {
       setCachedModels(prefix, models);
       results[prefix] = { count: models.length, models: models };
     } catch (e) {
+      console.error('[models] error for ' + prefix + ':', e.message);
       results[prefix] = { error: e.message, models: [] };
     }
   }
@@ -75,28 +79,36 @@ export async function getAggregatedModels() {
 }
 
 async function fetchModelsFromProvider(provider, key) {
-  var baseUrl = provider.upstream_url + (provider.models_endpoint || '/v1/models');
+  var modelsEndpoint = provider.models_endpoint || '/v1/models';
+  var initialUrl = modelsEndpoint.startsWith('http') ? modelsEndpoint : provider.upstream_url + modelsEndpoint;
+  
   var allModels = [];
-  var url = baseUrl;
+  var url = initialUrl;
   var page = 0;
   var maxPages = 50;
 
-  while (url && page < maxPages) {
-    var headers = { 'content-type': 'application/json' };
-    var authType = (provider.auth_type || 'bearer').toLowerCase();
-
-    if (key) {
-      if (authType === 'bearer') {
-        headers['authorization'] = 'Bearer ' + key;
-      } else if (authType === 'x-api-key') {
-        headers['x-api-key'] = key;
-      } else {
-        headers[provider.auth_header || 'authorization'] = key;
-      }
+  // Sandbox Override Logic
+  var sandboxResult = null;
+  if (provider.sandbox_code) {
+    var requestContext = {
+      path: initialUrl,
+      method: 'GET',
+      original_model: '',
+      stripped_model: '',
+    };
+    sandboxResult = runSandboxCode(provider.sandbox_code, {}, {}, provider, requestContext);
+    if (sandboxResult.url) url = sandboxResult.url;
+    else if (sandboxResult.url_path) {
+        url = provider.upstream_url + sandboxResult.url_path;
     }
+  }
+
+  while (url && page < maxPages) {
+    var headers = (sandboxResult && sandboxResult.headers) ? JSON.parse(JSON.stringify(sandboxResult.headers)) : buildDefaultHeaders(provider);
+    headers = injectKey(headers, key);
 
     var resp = await fetch(url, {
-      method: 'GET',
+      method: sandboxResult?.method || 'GET',
       headers: headers,
       signal: AbortSignal.timeout(60000)
     });
@@ -107,6 +119,26 @@ async function fetchModelsFromProvider(provider, key) {
     }
 
     var json = await resp.json();
+    
+    // Apply Sandbox Response Parser if present
+    if (sandboxResult && sandboxResult.response_parser) {
+        var parser = sandboxResult.response_parser;
+        if (typeof parser === 'string' && parser.startsWith('function')) {
+            try {
+                parser = new Function('return ' + parser)();
+            } catch (e) {
+                console.error('[models] failed to compile sandbox parser:', e.message);
+            }
+        }
+        if (typeof parser === 'function') {
+            try {
+                json = parser(json, 'models');
+            } catch (e) {
+                console.error('[models] sandbox parser error:', e.message);
+            }
+        }
+    }
+
     var pageModels = extractModels(json);
 
     for (var i = 0; i < pageModels.length; i++) {
@@ -118,11 +150,11 @@ async function fetchModelsFromProvider(provider, key) {
     var nextUrl = null;
 
     if (json.has_more && json.next_cursor) {
-      var separator = baseUrl.indexOf('?') !== -1 ? '&' : '?';
-      nextUrl = baseUrl + separator + 'cursor=' + json.next_cursor;
+      var separator = initialUrl.indexOf('?') !== -1 ? '&' : '?';
+      nextUrl = initialUrl + separator + 'cursor=' + json.next_cursor;
     } else if (json.next_page_token) {
-      var separator2 = baseUrl.indexOf('?') !== -1 ? '&' : '?';
-      nextUrl = baseUrl + separator2 + 'page_token=' + json.next_page_token;
+      var separator2 = initialUrl.indexOf('?') !== -1 ? '&' : '?';
+      nextUrl = initialUrl + separator2 + 'page_token=' + json.next_page_token;
     } else if (json.pagination && json.pagination.next) {
       nextUrl = json.pagination.next;
     }
@@ -148,6 +180,7 @@ async function fetchModelsFromProvider(provider, key) {
 }
 
 function extractModels(json) {
+  if (!json) return [];
   if (Array.isArray(json.data)) {
     return json.data.map(function(m) {
       return {
