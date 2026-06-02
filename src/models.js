@@ -88,8 +88,8 @@ async function fetchModelsFromProvider(provider, key) {
   var maxPages = 50;
 
   // Sandbox Override Logic
-  // Only apply sandbox overrides if the sandbox explicitly handles models
-  // (indicated by returning a response_parser). Chat-only sandbox code is ignored here.
+  // Only apply sandbox overrides if the sandbox explicitly opts in via handles_models flag.
+  // Chat-only sandbox code (which sets response_parser for streaming) is ignored here.
   var sandboxResult = null;
   if (provider.sandbox_code) {
     var requestContext = {
@@ -97,10 +97,11 @@ async function fetchModelsFromProvider(provider, key) {
       method: 'GET',
       original_model: '',
       stripped_model: '',
+      is_models_request: true,
     };
     var rawSandbox = runSandboxCode(provider.sandbox_code, {}, {}, provider, requestContext);
-    // Only use sandbox result if it returned a response_parser (= intentionally handles models)
-    if (rawSandbox.response_parser) {
+    // Only use sandbox result if it explicitly declared handles_models
+    if (rawSandbox.handled && rawSandbox.handled.models) {
       sandboxResult = rawSandbox;
       if (sandboxResult.url) url = sandboxResult.url;
       else if (sandboxResult.url_path) {
@@ -118,9 +119,9 @@ async function fetchModelsFromProvider(provider, key) {
     } else if (key) {
       var authType = (provider.auth_type || 'bearer').toLowerCase();
       if (authType === 'bearer') {
-        headers['authorization'] = 'Bearer ' + key;
+        headers[provider.auth_header || 'authorization'] = 'Bearer ' + key;
       } else if (authType === 'x-api-key') {
-        headers['x-api-key'] = key;
+        headers[provider.auth_header || 'x-api-key'] = key;
       } else {
         headers[provider.auth_header || 'authorization'] = key;
       }
@@ -218,7 +219,13 @@ function extractModels(json) {
     var v = json[k];
     if (Array.isArray(v) && v.length > 0) {
       return v.map(function(m) {
-        return typeof m === 'string' ? { id: m } : { id: m.id || m.name || String(m) };
+        if (typeof m === 'string') return { id: m };
+        var id = m.id || m.name || String(m);
+        // Strip "models/" prefix (Gemini returns "models/gemini-2.5-flash")
+        if (typeof id === 'string' && id.indexOf('/') !== -1) {
+          id = id.split('/').pop();
+        }
+        return { id: id, created: m.created, owned_by: m.owned_by };
       });
     }
   }
