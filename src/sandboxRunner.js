@@ -519,28 +519,32 @@ export function createSandboxSession(code, opts) {
   // ===================== result normalization =====================
   function normalizeRequestResult(r) {
     if (!r || typeof r !== 'object') return null;
-    var out = {
-      url: r.url ? String(r.url) : null,
-      url_path: r.url_path ? String(r.url_path) : null,
-      method: r.method ? String(r.method).toUpperCase() : null,
-      headers: null,
-      body: r.body !== undefined ? r.body : null,
-      raw_body_buffer: r.raw_body_buffer instanceof Buffer ? r.raw_body_buffer : null,
-      is_multipart: !!r.is_multipart,
-      form: r.form || null,
-      stream: typeof r.stream === 'boolean' ? r.stream : null,
-      upstream_stream_format: r.upstream_stream_format ? String(r.upstream_stream_format).toLowerCase() : null,
-      downstream_stream_format: r.downstream_stream_format ? String(r.downstream_stream_format).toLowerCase() : null,
-      retry_codes: Array.isArray(r.retry_codes) ? r.retry_codes.map(Number) : null,
-      retry_codes_mode: r.retry_codes_mode ? String(r.retry_codes_mode) : 'replace',
-      timeout_ms: r.timeout_ms && !isNaN(Number(r.timeout_ms)) ? Number(r.timeout_ms) : null,
-      handled: r.handled || {},
-      endpoint_type: r.endpoint_type ? String(r.endpoint_type).toLowerCase() : null,
-      hijack: !!r.hijack,
-      passthrough: !!r.passthrough,
-      next_request: r.next_request || null,
-      error: null,
-    };
+    // Preserve ALL keys the sandbox returned, then normalize the ones we know about.
+    // This means sandboxes can attach arbitrary metadata that the proxy or downstream
+    // tools may use - we don't drop anything.
+    var out = {};
+    for (var k in r) out[k] = r[k];
+
+    out.url = r.url ? String(r.url) : null;
+    out.url_path = r.url_path ? String(r.url_path) : null;
+    out.method = r.method ? String(r.method).toUpperCase() : null;
+    out.headers = null;
+    out.body = r.body !== undefined ? r.body : null;
+    out.raw_body_buffer = r.raw_body_buffer instanceof Buffer ? r.raw_body_buffer : null;
+    out.is_multipart = !!r.is_multipart;
+    out.form = r.form || null;
+    out.stream = typeof r.stream === 'boolean' ? r.stream : null;
+    out.upstream_stream_format = r.upstream_stream_format ? String(r.upstream_stream_format).toLowerCase() : null;
+    out.downstream_stream_format = r.downstream_stream_format ? String(r.downstream_stream_format).toLowerCase() : null;
+    out.retry_codes = Array.isArray(r.retry_codes) ? r.retry_codes.map(Number) : null;
+    out.retry_codes_mode = r.retry_codes_mode ? String(r.retry_codes_mode) : 'replace';
+    out.timeout_ms = r.timeout_ms && !isNaN(Number(r.timeout_ms)) ? Number(r.timeout_ms) : null;
+    out.handled = r.handled || {};
+    out.endpoint_type = r.endpoint_type ? String(r.endpoint_type).toLowerCase() : null;
+    out.hijack = !!r.hijack;
+    out.passthrough = !!r.passthrough;
+    out.next_request = r.next_request || null;
+    out.error = null;
     if (r.headers && typeof r.headers === 'object') {
       out.headers = {};
       for (var hk in r.headers) out.headers[hk.toLowerCase()] = r.headers[hk];

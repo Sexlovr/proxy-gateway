@@ -8,6 +8,8 @@ import { providersRouter } from './src/providers.js';
 import { modelsRouter, getAggregatedModels } from './src/models.js';
 import { statsRouter, trackRequest } from './src/stats.js';
 import { handleProxy } from './src/proxy.js';
+import { initSandboxLoader, getSandboxCode, listSandboxFiles, getSandboxDir } from './src/sandboxLoader.js';
+import { createSandboxSession } from './src/sandboxRunner.js';
 
 var __dirname = path.dirname(fileURLToPath(import.meta.url));
 var PORT = process.env.PORT || 7860;
@@ -342,19 +344,159 @@ app.get('/v1/models', async function(_req, res) {
   }
 });
 
+// ── Sandbox testing endpoints ───────────────────────────────────────────────
+//
+// POST /sandbox/test   { code: "JS string" | filename: "foo.js" | provider: "opn",
+//                        req: {...}, stream: false }
+//
+// Runs the sandbox's request phase against the given request and returns the
+// request descriptor the sandbox would have produced.  Useful for iterating
+// on sandbox code without making real upstream calls.  Does NOT call upstream.
+//
+// POST /sandbox/test_response  { code/filename/provider, upstreamStatus: 200,
+//                                 upstreamHeaders: {...}, upstreamBody: "..."} { }
+// Runs the sandbox's response phase with the given upstream body, returns the
+// downstream payload the sandbox would have emitted.
+//
+// GET  /sandbox/files   lists the loaded sandbox files from ./sandboxes/
+// GET  /sandbox/file/:name  returns the cached source for a sandbox file
+
+app.post('/sandbox/test', async function(req, res) {
+  var body = req.body || {};
+  var code = body.code || null;
+  if (!code && body.filename) {
+    var fetched = getSandboxCode(body.filename);
+    if (fetched && fetched.error) return res.status(400).json({ error: fetched.error });
+    code = fetched ? fetched.code : null;
+  }
+  if (!code && body.provider) {
+    var p = getProvider(body.provider.toLowerCase());
+    if (!p) return res.status(404).json({ error: 'provider not found' });
+    if (p.sandbox_code) code = p.sandbox_code;
+    else if (p.sandbox_file) {
+      var f2 = getSandboxCode(p.sandbox_file);
+      if (f2 && f2.error) return res.status(400).json({ error: f2.error });
+      code = f2 ? f2.code : null;
+    }
+  }
+  if (!code) return res.status(400).json({ error: 'no code supplied (send code, filename, or provider)' });
+
+  var session = createSandboxSession(code, {
+    req: body.req || {},
+    features: body.features || {},
+    provider: body.provider ? (getProvider(body.provider.toLowerCase()) || {}) : { name: 'test' },
+    context: {
+      path: body.path || '/v1/chat/completions',
+      method: body.method || 'POST',
+      original_model: body.original_model || (body.req && body.req.model) || '',
+      stripped_model: body.stripped_model || '',
+    },
+    stream: !!body.stream,
+    allowedHosts: body.allowed_hosts || [],
+    perRequestTimeout: 5000,
+    perFetchTimeout: 5000,
+    maxConcurrent: 1,
+    maxChain: 1,
+    maxBytes: 1 * 1024 * 1024,
+    log: function () {},
+  });
+  if (!session || session.error) return res.status(400).json({ error: session ? session.error : 'sandbox does not declare universal contract' });
+
+  try {
+    var reqResult = await session.dispatchRequest();
+    var out = { request: reqResult, trace: session.getTrace() };
+    session.dispose();
+    res.json(out);
+  } catch (e) {
+    res.status(500).json({ error: e.message, trace: session.getTrace() });
+  }
+});
+
+app.post('/sandbox/test_response', async function(req, res) {
+  var body = req.body || {};
+  var code = body.code || null;
+  if (!code && body.filename) {
+    var fetched = getSandboxCode(body.filename);
+    if (fetched && fetched.error) return res.status(400).json({ error: fetched.error });
+    code = fetched ? fetched.code : null;
+  }
+  if (!code && body.provider) {
+    var p = getProvider(body.provider.toLowerCase());
+    if (!p) return res.status(404).json({ error: 'provider not found' });
+    if (p.sandbox_code) code = p.sandbox_code;
+    else if (p.sandbox_file) {
+      var f2 = getSandboxCode(p.sandbox_file);
+      if (f2 && f2.error) return res.status(400).json({ error: f2.error });
+      code = f2 ? f2.code : null;
+    }
+  }
+  if (!code) return res.status(400).json({ error: 'no code supplied' });
+
+  var session = createSandboxSession(code, {
+    req: body.req || {},
+    provider: body.provider ? (getProvider(body.provider.toLowerCase()) || {}) : { name: 'test' },
+    allowedHosts: [],
+    perRequestTimeout: 5000,
+    maxChain: 1,
+    log: function () {},
+  });
+  if (!session || session.error) return res.status(400).json({ error: session ? session.error : 'sandbox does not declare universal contract' });
+
+  try {
+    var upstreamBodyBuffer = Buffer.from(body.upstreamBody || '', 'utf8');
+    var fakeHeaders = new Map();
+    if (body.upstreamHeaders) {
+      for (var k in body.upstreamHeaders) fakeHeaders.set(k, body.upstreamHeaders[k]);
+    }
+    if (body.upstreamContentType) fakeHeaders.set('content-type', body.upstreamContentType);
+
+    var respResult = await session.dispatchResponse({
+      status: body.upstreamStatus || 200,
+      headers: fakeHeaders,
+      bodyBuffer: upstreamBodyBuffer,
+    });
+    var out = { response: respResult, trace: session.getTrace() };
+    session.dispose();
+    res.json(out);
+  } catch (e) {
+    res.status(500).json({ error: e.message, trace: session.getTrace() });
+  }
+});
+
+app.get('/sandbox/files', function(_req, res) {
+  res.json({ dir: getSandboxDir(), files: listSandboxFiles() });
+});
+
+app.get('/sandbox/file/:name', function(req, res) {
+  var fetched = getSandboxCode(req.params.name);
+  if (!fetched) return res.status(404).json({ error: 'not found' });
+  if (fetched.error) return res.status(400).json({ error: fetched.error });
+  res.type('text/plain').send(fetched.code);
+});
+
 app.get('*', function(req, res, next) {
-  if (req.path.startsWith('/api/') || req.path.startsWith('/v1/')) return next();
+  if (req.path.startsWith('/api/') || req.path.startsWith('/v1/') || req.path.startsWith('/sandbox/')) return next();
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(fullPage);
 });
 
-app.all('*', handleProxy);
+app.all('*', function(req, res, next) {
+  if (req.path.startsWith('/sandbox/')) return next();
+  return handleProxy(req, res);
+});
 
 try {
   await initStorage();
   console.log('[boot] Storage initialized');
 } catch (e) {
   console.error('[boot] Storage init error:', e.message);
+}
+
+try {
+  initSandboxLoader();
+  console.log('[boot] Sandbox loader initialized');
+} catch (e) {
+  console.error('[boot] Sandbox loader init error:', e.message);
 }
 
 app.listen(PORT, '0.0.0.0', function() {

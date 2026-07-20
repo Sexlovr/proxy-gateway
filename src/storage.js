@@ -98,6 +98,8 @@ export async function addProvider(provider) {
   provider.think_config = provider.think_config || null;
   provider.search_config = provider.search_config || null;
   provider.sandbox_code = provider.sandbox_code || null;
+  provider.sandbox_file = provider.sandbox_file || null;
+  provider.allowed_hosts = Array.isArray(provider.allowed_hosts) ? provider.allowed_hosts : [];
 
   cache.providers[prefix] = Object.assign({}, provider, {
     created_at: new Date().toISOString(),

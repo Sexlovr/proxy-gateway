@@ -77,6 +77,8 @@ providersRouter.post('/', async function(req, res) {
     models_endpoint: body.models_endpoint || '/v1/models',
     sandbox: parsedSandbox,
     sandbox_code: body.sandbox_code || null,
+    sandbox_file: body.sandbox_file || null,
+    allowed_hosts: Array.isArray(body.allowed_hosts) ? body.allowed_hosts : null,
     think_config: parsedThinkConfig,
     search_config: parsedSearchConfig,
     cloaked: body.cloaked || false,
