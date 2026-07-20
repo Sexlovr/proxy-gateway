@@ -210,7 +210,7 @@ async function universalHandler(req, res, provider, prefix, strippedModel, model
 
   // Hijack: sandbox fully owns response. We stop here.
   if (reqResult.hijack) {
-    recordProxyRequest(prefix, ip, false);
+    recordProxyRequest(prefix, ip, false, reqResult.endpoint_type || null);
     session.dispose();
     return;
   }
@@ -235,44 +235,11 @@ async function universalHandler(req, res, provider, prefix, strippedModel, model
   }
 
   var customTimeout = reqResult.timeout_ms || 300000;
-  var chainCount = 0;
+  var endpointType = reqResult.endpoint_type || null;
   const MAX_CHAIN = 10;
-
-  // Resolve URL
-  var urlOverride = reqResult.url;
-  var urlPathOverride = reqResult.url_path;
-
-  // HEADERS: sandbox may provide headers with {{KEY}} placeholders, or null to use default
-  var baseHeaders = reqResult.headers;
-  if (!baseHeaders) {
-    baseHeaders = {};
-    var authType = (provider.auth_type || 'bearer').toLowerCase();
-    var authHeaderName = provider.auth_header || 'authorization';
-    if (authType === 'bearer') baseHeaders[authHeaderName] = 'Bearer {{KEY}}';
-    else if (authType === 'x-api-key') baseHeaders['x-api-key'] = '{{KEY}}';
-    else baseHeaders[authHeaderName] = '{{KEY}}';
-    baseHeaders['content-type'] = 'application/json';
-  }
-
-  // BODY (handling multipart + raw)
-  var bodyObj = reqResult.body;
-  var isMultipart = !!reqResult.is_multipart;
-  var formFields = reqResult.form;
-  var rawBodyBuffer = reqResult.raw_body_buffer instanceof Buffer ? reqResult.raw_body_buffer : null;
-
-  // METHOD
-  var httpMethod = (reqResult.method || req.method || 'POST').toUpperCase();
-
-  var requestDescriptor = {
-    url: urlOverride,
-    url_path: urlPathOverride,
-    method: httpMethod,
-    headers: baseHeaders,
-    body: bodyObj,
-    is_multipart: isMultipart,
-    form: formFields,
-    raw_body_buffer: rawBodyBuffer,
-  };
+  var chainCount = 0;
+  // The "current" request descriptor; may be mutated by next_request chain-poll results.
+  var requestDescriptor = buildRequestDescriptor(reqResult, provider, req);
 
   // Build multipart body if requested
   function buildMultipartBody(form, key) {
@@ -302,6 +269,31 @@ async function universalHandler(req, res, provider, prefix, strippedModel, model
     return Math.random().toString(36).slice(2) + Date.now().toString(36);
   }
 
+  // Returns { requestDescriptor, streamIntent, upstreamStreamFormat, downstreamStreamFormat,
+  //          retryCodes, customTimeout, endpointType } from a phase result.
+  function buildRequestDescriptor(phaseResult, provider, req) {
+    var baseHeaders = phaseResult.headers;
+    if (!baseHeaders) {
+      baseHeaders = {};
+      var authType = (provider.auth_type || 'bearer').toLowerCase();
+      var authHeaderName = provider.auth_header || 'authorization';
+      if (authType === 'bearer') baseHeaders[authHeaderName] = 'Bearer {{KEY}}';
+      else if (authType === 'x-api-key') baseHeaders['x-api-key'] = '{{KEY}}';
+      else baseHeaders[authHeaderName] = '{{KEY}}';
+      baseHeaders['content-type'] = 'application/json';
+    }
+    return {
+      url: phaseResult.url || null,
+      url_path: phaseResult.url_path || null,
+      method: (phaseResult.method || req.method || 'POST').toUpperCase(),
+      headers: baseHeaders,
+      body: phaseResult.body,
+      is_multipart: !!phaseResult.is_multipart,
+      form: phaseResult.form || null,
+      raw_body_buffer: phaseResult.raw_body_buffer instanceof Buffer ? phaseResult.raw_body_buffer : null,
+    };
+  }
+
   // Inner loop: try each key (rotation/retry)
   while (true) {
     var picked = getNextKey(prefix, providerKeys, skipped);
@@ -323,7 +315,6 @@ async function universalHandler(req, res, provider, prefix, strippedModel, model
     if (fetchOpts.method !== 'GET' && fetchOpts.method !== 'HEAD') {
       if (requestDescriptor.is_multipart && Array.isArray(requestDescriptor.form)) {
         var mb = buildMultipartBody(requestDescriptor.form, key);
-        // Replace content-type with boundary
         headers['content-type'] = mb.contentType;
         fetchOpts.body = mb.body;
       } else if (requestDescriptor.raw_body_buffer instanceof Buffer) {
@@ -368,9 +359,94 @@ async function universalHandler(req, res, provider, prefix, strippedModel, model
         await universalStreamDownstream(req, res, session, upstream, prefix, ip, strippedModel, modelRaw,
           upstreamStreamFormat, downstreamStreamFormat, clientWantsStream);
       } else {
-        await universalBufferedDownstream(req, res, session, upstream, prefix, ip, strippedModel, modelRaw);
+        var result = await universalBufferedDownstream(req, res, session, upstream, prefix, ip, strippedModel, modelRaw, true);
+
+        // Chain-poll: if sandbox returned { next_request: {...} }, we dispatch another upstream call
+        // using the new request descriptor, then run the response phase again.
+        //
+        // Why this is useful: async image gen endpoints (POST /generation -> poll /status/{id})
+        // can be expressed simply:
+        //   response: function(ctx) {
+        //     if (ctx.upstream.bodyJson.status === 'pending') {
+        //       return { passthrough: false, next_request: { url_path: '/status/' + ctx.upstream.bodyJson.id } };
+        //     } else {
+        //       return { passthrough: false, body: ctx.upstream.bodyJson };
+        //     }
+        //   }
+        //
+        // The proxy continues, keeping the same key, until sandbox stops returning next_request.
+        while (result && result.next_request && chainCount < MAX_CHAIN && !skipped.has(index)) {
+          chainCount++;
+          var nextReq = result.next_request;
+          var nextDescriptor = buildRequestDescriptor(nextReq, provider, req);
+          // Allow streaming intent changeover per hop
+          if (typeof nextReq.stream === 'boolean') streamIntent = nextReq.stream;
+          if (nextReq.upstream_stream_format) upstreamStreamFormat = nextReq.upstream_stream_format;
+          if (nextReq.downstream_stream_format) downstreamStreamFormat = nextReq.downstream_stream_format;
+
+          var nextHeaders = injectKey(nextDescriptor.headers || requestDescriptor.headers, key);
+          var nextUrl = nextDescriptor.url
+            ? nextDescriptor.url.replace(/{{KEY}}/g, encodeURIComponent(key)).replace(/{{KEYRAW}}/g, key)
+            : provider.upstream_url + (nextDescriptor.url_path || req.path);
+
+          var nextFetchOpts = {
+            method: nextDescriptor.method,
+            headers: nextHeaders,
+            signal: AbortSignal.timeout(nextReq.timeout_ms || customTimeout),
+          };
+          if (nextFetchOpts.method !== 'GET' && nextFetchOpts.method !== 'HEAD') {
+            if (nextDescriptor.raw_body_buffer instanceof Buffer) {
+              nextFetchOpts.body = nextDescriptor.raw_body_buffer;
+            } else if (nextDescriptor.body !== undefined && nextDescriptor.body !== null) {
+              nextFetchOpts.body = typeof nextDescriptor.body === 'string' ? nextDescriptor.body : JSON.stringify(nextDescriptor.body);
+            }
+          }
+          if (picked.proxyUrl) nextFetchOpts.dispatcher = getProxyAgent(picked.proxyUrl);
+
+          try {
+            upstream = await undiciFetch(nextUrl, nextFetchOpts);
+          } catch (err) {
+            skipped.add(index);
+            lastError = 'chain-poll fetch failed: ' + err.message;
+            break;
+          }
+
+          if (retryCodes.indexOf(upstream.status) !== -1) {
+            skipped.add(index);
+            lastError = 'Key #' + (index + 1) + ' returned ' + upstream.status + ' during chain-poll';
+            break;
+          }
+
+          // Re-run response phase on chained upstream
+          result = await universalBufferedDownstream(req, res, session, upstream, prefix, ip, strippedModel, modelRaw, true);
+
+          if (result && result.__streamed_downstream_already) {
+            // Streaming case handled the response directly; we are done.
+            break;
+          }
+        }
+
+        // Loop ended — flush the final result to res.
+        if (result && !result.__errored && !result.__timedOut && !res.headersSent) {
+          if (result.passthrough) {
+            flushPassthrough(res, upstream, result.bodyBuffer, result);
+          } else {
+            res.status(result.status || 200);
+            if (result.headers && typeof result.headers === 'object') {
+              for (var hf in result.headers) res.setHeader(hf, result.headers[hf]);
+            }
+            if (!res.get('content-type')) res.setHeader('content-type', 'application/json');
+            if (result.body !== undefined && result.body !== null) {
+              if (typeof result.body === 'string') res.send(result.body);
+              else if (result.body instanceof Buffer) res.send(result.body);
+              else res.json(result.body);
+            } else {
+              res.end();
+            }
+          }
+        }
       }
-      recordProxyRequest(prefix, ip, upstream.status >= 400);
+      recordProxyRequest(prefix, ip, upstream.status >= 400, endpointType);
       return;
     } catch (err) {
       skipped.add(index);
@@ -380,12 +456,16 @@ async function universalHandler(req, res, provider, prefix, strippedModel, model
     }
   }
 
-  recordProxyRequest(prefix, ip, true);
+  recordProxyRequest(prefix, ip, true, endpointType);
   res.status(502).json({ error: { message: 'All ' + providerKeys.length + ' key(s) for "' + prefix + '" failed. Last error: ' + lastError, type: 'proxy_error' } });
 }
 
-// Buffered (non-streamed) universal downstream
-async function universalBufferedDownstream(req, res, session, upstream, prefix, ip, strippedModel, modelRaw) {
+// Buffered (non-streamed) universal downstream.
+// If noFlush is true, the function does NOT write the response yet — it returns
+// { next_request, passthrough, status, headers, body/bodyText/bodyBuffer } so
+// the caller can chain-poll. Once a hop has no next_request, the caller flushes.
+// If noFlush is false (default), the function writes the response immediately.
+async function universalBufferedDownstream(req, res, session, upstream, prefix, ip, strippedModel, modelRaw, noFlush) {
   var bodyBuffer = await upstream.arrayBuffer();
   bodyBuffer = Buffer.from(bodyBuffer);
 
@@ -398,36 +478,37 @@ async function universalBufferedDownstream(req, res, session, upstream, prefix, 
     });
   } catch (err) {
     res.setHeader('x-sandbox-error', 'response phase threw: ' + err.message);
-    // Passthrough fallback
-    for (var pair of upstream.headers.entries()) {
-      var lower = pair[0].toLowerCase();
-      if (['transfer-encoding', 'connection', 'keep-alive', 'content-encoding'].indexOf(lower) !== -1) continue;
-      res.setHeader(pair[0], pair[1]);
+    if (noFlush) {
+      return { __errored: true, bodyBuffer: bodyBuffer };
     }
-    res.status(upstream.status);
-    res.send(Buffer.from(bodyBuffer));
+    flushPassthrough(res, upstream, bodyBuffer);
     return;
   }
 
   if (!respResult || respResult.__timedOut) {
+    if (noFlush) return { __timedOut: true, bodyBuffer: bodyBuffer };
     res.setHeader('x-sandbox-error', 'response phase timed out');
-    res.status(upstream.status);
-    res.send(Buffer.from(bodyBuffer));
+    flushPassthrough(res, upstream, bodyBuffer);
     return;
   }
 
   if (respResult.passthrough) {
-    for (var p of upstream.headers.entries()) {
-      var l = p[0].toLowerCase();
-      if (['transfer-encoding', 'connection', 'keep-alive', 'content-encoding'].indexOf(l) !== -1) continue;
-      res.setHeader(p[0], p[1]);
+    if (noFlush) {
+      return { passthrough: true, status: respResult.status, headers: respResult.headers, bodyBuffer: bodyBuffer, next_request: respResult.next_request || null };
     }
-    res.status(upstream.status);
-    res.send(Buffer.from(bodyBuffer));
+    flushPassthrough(res, upstream, bodyBuffer, respResult);
     return;
   }
 
-  // Sandbox shaped it
+  // Sandbox shaped it. If chain (next_request), capture without writing.
+  if (noFlush && respResult.next_request) {
+    return { passthrough: false, status: respResult.status, headers: respResult.headers, body: respResult.body, next_request: respResult.next_request };
+  }
+
+  if (noFlush) {
+    return { passthrough: false, status: respResult.status || 200, headers: respResult.headers || {}, body: respResult.body, next_request: null };
+  }
+
   res.status(respResult.status || 200);
   if (respResult.headers && typeof respResult.headers === 'object') {
     for (var h in respResult.headers) res.setHeader(h, respResult.headers[h]);
@@ -440,6 +521,19 @@ async function universalBufferedDownstream(req, res, session, upstream, prefix, 
   } else {
     res.end();
   }
+}
+
+function flushPassthrough(res, upstream, bodyBuffer, respResult) {
+  for (var p of upstream.headers.entries()) {
+    var l = p[0].toLowerCase();
+    if (['transfer-encoding', 'connection', 'keep-alive', 'content-encoding'].indexOf(l) !== -1) continue;
+    res.setHeader(p[0], p[1]);
+  }
+  if (respResult && respResult.headers && typeof respResult.headers === 'object') {
+    for (var h2 in respResult.headers) res.setHeader(h2, respResult.headers[h2]);
+  }
+  res.status((respResult && respResult.status) || upstream.status);
+  res.send(Buffer.from(bodyBuffer));
 }
 
 // Streamed universal downstream
@@ -457,6 +551,29 @@ async function universalStreamDownstream(req, res, session, upstream, prefix, ip
   var streamBuffer = '';
   var chunkIndex = 0;
 
+  // Track whether the sandbox actually has a stream_chunk phase. If it doesn't,
+  // we use default framing translation: re-emit the upstream frame verbatim in
+  // the downstream format. This means sandboxes that only define 'request' still
+  // get usable streaming — no more silent drops.
+  var hasStreamChunkPhase = session.hasPhase ? session.hasPhase('stream_chunk') : true;
+
+  function defaultDownstreamFrame(rawData, ev) {
+    // Re-frame `rawData` (a parsed upstream frame's data string) into the downstream
+    // streaming format.
+    var fmt = (downstreamStreamFormat || 'sse').toLowerCase();
+    if (fmt === 'sse' || fmt === 'openai_chat_sse') {
+      return 'event: ' + (ev || '') + '\n' + 'data: ' + rawData + '\n\n';
+    }
+    if (fmt === 'ndjson' || fmt === 'json_lines') {
+      // For NDJSON: only emit if rawData looks like a complete JSON object
+      return rawData + '\n';
+    }
+    if (fmt === 'raw') {
+      return rawData;
+    }
+    return rawData;
+  }
+
   try {
     while (true) {
       var chunk;
@@ -473,13 +590,28 @@ async function universalStreamDownstream(req, res, session, upstream, prefix, ip
         var ev = frame.event || '';
         var dataText = frame.data;
 
-        var processed = await session.dispatchStreamChunk({
-          chunkText: dataText,
-          chunkBuffer: null,
-          chunkIndex: chunkIndex++,
-          isLast: false,
-          upstreamEvent: ev,
-        });
+        var processed = null;
+        if (hasStreamChunkPhase) {
+          processed = await session.dispatchStreamChunk({
+            chunkText: dataText,
+            chunkBuffer: null,
+            chunkIndex: chunkIndex++,
+            isLast: false,
+            upstreamEvent: ev,
+          });
+        } else {
+          chunkIndex++;
+          // No stream_chunk phase defined — default passthrough: re-frame the upstream data
+          if (downstreamStreamFormat === 'openai_chat_sse' && upstreamStreamFormat !== 'openai_chat_sse') {
+            // The user requested OpenAI-chat SSE downstream but provided no translation
+            // (there's no stream_chunk defined). We can't synthesize OpenAI chunks
+            // from arbitrary upstream frames without a parser. Fall back to "raw" and
+            // pass through verbatim so the client at least sees the stream.
+            processed = { downstream_chunk: defaultDownstreamFrame(dataText, ev) };
+          } else {
+            processed = { downstream_chunk: defaultDownstreamFrame(dataText, ev) };
+          }
+        }
 
         if (!processed || processed.__timedOut) continue;
         if (processed.done) {

@@ -350,6 +350,7 @@ export function createSandboxSession(code, opts) {
   var trace = [];
   var timers = [];
   var log = opts.log || function () {};
+  var sessionError = null;
 
   var ctx = buildContext({
     allowedHosts: opts.allowedHosts || [],
@@ -561,6 +562,7 @@ export function createSandboxSession(code, opts) {
         headers: upstream ? upstream.headers : null,
         bodyText: defaultBodyText,
         bodyBuffer: defaultBodyBuffer,
+        next_request: null,
       };
     }
     if (r.__timedOut) {
@@ -570,24 +572,40 @@ export function createSandboxSession(code, opts) {
         headers: upstream ? upstream.headers : null,
         bodyText: defaultBodyText,
         bodyBuffer: defaultBodyBuffer,
+        next_request: null,
         sandboxError: 'response phase timed out',
       };
     }
     if (r.passthrough) {
-      return {
+      // Preserve all sandbox-authored fields (next_request, endpoint_type overrides, etc.)
+      var passOut = {
         passthrough: true,
         status: r.status || (upstream ? upstream.status : 200),
         headers: r.headers || (upstream ? upstream.headers : null),
         bodyText: defaultBodyText,
         bodyBuffer: defaultBodyBuffer,
+        next_request: r.next_request || null,
       };
+      // Preserve any extra fields the sandbox returned
+      for (var ek in r) {
+        if (ek === 'passthrough' || ek === 'status' || ek === 'headers' || ek === 'bodyText' || ek === 'bodyBuffer' || ek === 'next_request') continue;
+        passOut[ek] = r[ek];
+      }
+      return passOut;
     }
-    return {
+    var out = {
       passthrough: false,
       status: r.status || 200,
       headers: r.headers || {},
       body: r.body !== undefined ? r.body : null,
+      next_request: r.next_request || null,
     };
+    // Preserve any extra fields the sandbox returned
+    for (var ek2 in r) {
+      if (ek2 === 'passthrough' || ek2 === 'status' || ek2 === 'headers' || ek2 === 'body' || ek2 === 'next_request') continue;
+      out[ek2] = r[ek2];
+    }
+    return out;
   }
 
   function normalizeStreamChunkResult(r) {
@@ -608,12 +626,23 @@ export function createSandboxSession(code, opts) {
     } catch (e) {}
   }
 
+  function hasPhase(name) {
+    if (asObject) return typeof phaseFn[name] === 'function';
+    // Function-style export: sandbox is expected to handle every phase it cares
+    // about — the proxy can't statically know. Be conservative: report true so
+    // the proxy still calls dispatch (the sandbox can return undefined or null
+    // for phases it doesn't recognise; the proxy handles that gracefully).
+    return true;
+  }
+
   return {
     dispatchRequest: dispatchRequest,
     dispatchResponse: dispatchResponse,
     dispatchStreamChunk: dispatchStreamChunk,
     dispatchStreamEnd: dispatchStreamEnd,
+    hasPhase: hasPhase,
     getTrace: function () { return trace; },
+    getError: function () { return sessionError; },
     dispose: dispose,
   };
 }

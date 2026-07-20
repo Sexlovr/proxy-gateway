@@ -183,7 +183,7 @@ export function getStats() {
   return cache.stats || defaults.stats;
 }
 
-export function recordRequest(prefix, ip, errored) {
+export function recordRequest(prefix, ip, errored, endpointType) {
   errored = errored || false;
   cache.stats.totalRequests++;
   if (errored) cache.stats.totalErrors++;
@@ -191,12 +191,16 @@ export function recordRequest(prefix, ip, errored) {
 
   if (prefix) {
     if (!cache.stats.providers[prefix]) {
-      cache.stats.providers[prefix] = { requests: 0, errors: 0, uniqueIps: [] };
+      cache.stats.providers[prefix] = { requests: 0, errors: 0, uniqueIps: [], endpoints: {} };
     }
     var p = cache.stats.providers[prefix];
     p.requests++;
     if (errored) p.errors++;
     if (p.uniqueIps.indexOf(ip) === -1) p.uniqueIps.push(ip);
+    if (endpointType) {
+      if (!p.endpoints) p.endpoints = {};
+      p.endpoints[endpointType] = (p.endpoints[endpointType] || 0) + 1;
+    }
   }
 }
 

@@ -22,9 +22,9 @@ export function trackRequest(req, _res, next) {
   next();
 }
 
-export function recordProxyRequest(prefix, ip, errored) {
+export function recordProxyRequest(prefix, ip, errored, endpointType) {
   errored = errored || false;
-  _record(prefix, ip, errored);
+  _record(prefix, ip, errored, endpointType);
   activeSessions.set(ip, Date.now());
 }
 
@@ -53,6 +53,7 @@ statsRouter.get('/', function(_req, res) {
         requests: s.requests,
         errors: s.errors,
         uniqueUsers: s.uniqueIps ? s.uniqueIps.length : 0,
+        endpoints: s.endpoints || {},
       };
     }
   }
