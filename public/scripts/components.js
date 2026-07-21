@@ -50,6 +50,9 @@ export function toast(message, type = 'info', duration = 4000) {
 
 // ---------- Modal ----------
 let _modalActive = null;
+export function closeModal() {
+  if (_modalActive && typeof _modalActive._close === 'function') _modalActive._close();
+}
 export function openModal(content, opts = {}) {
   const { size = '', closable = true, onClose } = opts;
   const root = $('#modal-root');

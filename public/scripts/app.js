@@ -41,6 +41,12 @@ function init() {
   attachRipple(document);
   wireCopyButtons(document);
 
+  $('#theme-toggle').addEventListener('click', (e) => {
+    const seg = e.target.closest('.seg');
+    if (!seg) return;
+    Theme.set(seg.dataset.themeVal);
+  });
+
   $$('.nav-item').forEach((n) => {
     n.addEventListener('click', (e) => {
       e.preventDefault();

@@ -1,5 +1,5 @@
 // pages/providers.js — providers list, search, cloak flow, edit/delete/detail modals.
-import { h, esc, toast, openModal, emptyState, skeleton, countUp, $ } from '../components.js';
+import { h, esc, toast, openModal, closeModal, emptyState, skeleton, countUp, $ } from '../components.js';
 import { Providers } from '../api.js';
 
 let _providers = {};
@@ -347,11 +347,11 @@ function openCloak(prefix) {
           try {
             await Providers.cloak(prefix, { cloak_name: name, cloak_password: pw });
             toast('Provider cloaked', 'success');
-            const m = $('#modal-root'); m.classList.remove('open'); m.innerHTML = '';
+            closeModal();
             refresh($('#providers-grid'), $('#providers-counts'), $('#cloaked-card'));
           } catch (e) { toast(e.message || 'Failed', 'error'); }
         } }),
-        h('button', { class: 'btn ghost', type: 'button', html: 'Cancel', onclick: () => { const m = $('#modal-root'); m.classList.remove('open'); m.innerHTML = ''; } }),
+        h('button', { class: 'btn ghost', type: 'button', html: 'Cancel', onclick: () => closeModal() }),
       ),
     ),
     { size: 'small' },
@@ -374,11 +374,11 @@ function openDelete(prefix) {
           try {
             await Providers.remove(prefix, pw);
             toast('Provider deleted', 'success');
-            const m = $('#modal-root'); m.classList.remove('open'); m.innerHTML = '';
+            closeModal();
             refresh($('#providers-grid'), $('#providers-counts'), $('#cloaked-card'));
           } catch (e) { toast(e.message || 'Failed', 'error'); }
         } }),
-        h('button', { class: 'btn ghost', type: 'button', html: 'Cancel', onclick: () => { const m = $('#modal-root'); m.classList.remove('open'); m.innerHTML = ''; } }),
+        h('button', { class: 'btn ghost', type: 'button', html: 'Cancel', onclick: () => closeModal() }),
       ),
     ),
     { size: 'small' },

@@ -5,6 +5,8 @@ import { Stats } from '../api.js';
 let _refreshTimer = null;
 
 export async function renderDashboard(root) {
+  // Stop polling if user navigates back here from a different page
+  if (_refreshTimer) { clearInterval(_refreshTimer); _refreshTimer = null; }
   // Mark sidebar live indicator
   const liveDot = document.querySelector('.nav-item[data-page="dashboard"] .live');
   if (liveDot) liveDot.hidden = false;

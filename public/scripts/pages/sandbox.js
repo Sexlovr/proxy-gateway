@@ -240,9 +240,12 @@ export async function renderSandbox(root) {
         h('span', { class: 'copy-tip' }, '⇄ Load'),
       );
       row.addEventListener('click', async () => {
-        sourceBar.querySelector('#sb-source').value = 'filename';
+        const sb = sourceBar.querySelector('#sb-source');
         const tgt = sourceBar.querySelector('#sb-source-target');
-        tgt.innerHTML = h_item(f);
+        sb.value = 'filename';
+        // Trigger change handler — it will populate the dropdown with all files
+        // from _files, then set the value, then re-dispatch change on target.
+        sb.dispatchEvent(new Event('change'));
         tgt.value = f;
         tgt.dispatchEvent(new Event('change'));
         toast('Loaded ' + f, 'info', 1500);
@@ -252,11 +255,6 @@ export async function renderSandbox(root) {
       filesList.appendChild(row);
     });
   }
-
-  function h_item(f) {
-    return `<option value="${fclean(f)}">${fclean(f)}</option>`;
-  }
-  function fclean(s) { return s.replace(/"/g, '"'); }
 }
 
 function renderOutput(container, result) {

@@ -150,9 +150,9 @@ export function renderHelp(root) {
         const cb = h('div', { class: 'codeblock' },
           h('div', { class: 'header' },
             h('span', { class: 'lang' }, 'js'),
-            h('button', { class: 'copy-btn', type: 'button', dataset: { copy: iid } }, '⧉ Copy'),
+            h('button', { class: 'copy-btn', type: 'button', dataset: { copy: iid + '-code' } }, '⧉ Copy'),
           ),
-          h('pre', { id: iid }, code),
+          h('pre', { id: iid + '-code' }, code),
         );
         content.appendChild(cb);
         content.appendChild(h('div', { style: { height: '12px' } }));
@@ -169,5 +169,5 @@ export function renderHelp(root) {
       }
     });
   }, { rootMargin: '-20% 0px -70% 0px' });
-  content.querySelectorAll('[id]').forEach((el) => obs.observe(el));
+  content.querySelectorAll('h2[id], h3[id]').forEach((el) => obs.observe(el));
 }
