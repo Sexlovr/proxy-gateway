@@ -1,0 +1,136 @@
+/* =========================================================================
+   aurora.css — animated mesh background.
+   Pure CSS via radial gradients + slow keyframes. No JS, no canvas.
+   Frozen under prefers-reduced-motion.
+   ========================================================================= */
+
+.aurora {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-aurora);
+  pointer-events: none;
+  background: var(--aurora-base);
+  overflow: hidden;
+}
+
+.aurora::before,
+.aurora::after,
+.aurora .blob-a,
+.aurora .blob-b,
+.aurora .blob-c {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.65;
+  will-change: transform, opacity;
+  mix-blend-mode: screen;
+}
+
+[data-theme="light"] .aurora::before,
+[data-theme="light"] .aurora::after,
+[data-theme="light"] .aurora .blob-a,
+[data-theme="light"] .aurora .blob-b,
+[data-theme="light"] .aurora .blob-c {
+  opacity: 0.45;
+  filter: blur(70px);
+  mix-blend-mode: multiply;
+}
+
+/* — soft overall drift — */
+.aurora::before {
+  width: 60vmax;
+  height: 60vmax;
+  left: -10vmax;
+  top: -15vmax;
+  background: radial-gradient(circle at center, var(--aurora-1), transparent 65%);
+  animation: aurora-drift-1 22s var(--ease-in-out) infinite alternate;
+}
+
+.aurora::after {
+  width: 55vmax;
+  height: 55vmax;
+  right: -12vmax;
+  top: -8vmax;
+  background: radial-gradient(circle at center, var(--aurora-3), transparent 65%);
+  animation: aurora-drift-2 26s var(--ease-in-out) infinite alternate;
+}
+
+.blob-a, .blob-b, .blob-c {
+  position: absolute;
+}
+
+.aurora .blob-a {
+  width: 48vmax;
+  height: 48vmax;
+  left: 35%;
+  top: 40%;
+  background: radial-gradient(circle at center, var(--aurora-2), transparent 70%);
+  animation: aurora-drift-3 30s var(--ease-in-out) infinite alternate;
+}
+
+.aurora .blob-b {
+  width: 40vmax;
+  height: 40vmax;
+  left: 65%;
+  bottom: -10vmax;
+  background: radial-gradient(circle at center, var(--aurora-4), transparent 70%);
+  animation: aurora-drift-4 28s var(--ease-in-out) infinite alternate;
+}
+
+.aurora .blob-c {
+  width: 30vmax;
+  height: 30vmax;
+  left: 10%;
+  bottom: 0%;
+  background: radial-gradient(circle at center, var(--aurora-1), transparent 70%);
+  animation: aurora-drift-5 24s var(--ease-in-out) infinite alternate;
+  opacity: 0.4;
+}
+
+@keyframes aurora-drift-1 {
+  0%   { transform: translate3d(0, 0, 0) scale(1); }
+  100% { transform: translate3d(8vmax, 6vmax, 0) scale(1.15); }
+}
+@keyframes aurora-drift-2 {
+  0%   { transform: translate3d(0, 0, 0) scale(1.1); }
+  100% { transform: translate3d(-7vmax, 8vmax, 0) scale(1); }
+}
+@keyframes aurora-drift-3 {
+  0%   { transform: translate3d(0, 0, 0) scale(1); }
+  100% { transform: translate3d(-6vmax, -8vmax, 0) scale(1.2); }
+}
+@keyframes aurora-drift-4 {
+  0%   { transform: translate3d(0, 0, 0) scale(1); }
+  100% { transform: translate3d(-10vmax, -5vmax, 0) scale(1.1); }
+}
+@keyframes aurora-drift-5 {
+  0%   { transform: translate3d(0, 0, 0) scale(0.9); }
+  100% { transform: translate3d(12vmax, -4vmax, 0) scale(1.25); }
+}
+
+/* Subtle vignette + grain overlay to deepen the glass effect */
+.aurora::before,
+.aurora::after { z-index: 0; }
+.aurora { isolation: isolate; }
+
+.vignette {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-aurora);
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse at 50% 0%, transparent 0%, rgba(0, 0, 0, 0.18) 100%) top / 100% 60vh no-repeat,
+    radial-gradient(ellipse at 50% 100%, transparent 0%, rgba(0, 0, 0, 0.22) 100%) bottom / 100% 50vh no-repeat;
+  mix-blend-mode: multiply;
+}
+[data-theme="light"] .vignette {
+  background:
+    radial-gradient(ellipse at 50% 0%, transparent 0%, rgba(255, 255, 255, 0.16) 100%) top / 100% 60vh no-repeat,
+    radial-gradient(ellipse at 50% 100%, transparent 0%, rgba(255, 255, 255, 0.20) 100%) bottom / 100% 50vh no-repeat;
+}
+[data-theme="cyber"] .vignette {
+  background:
+    radial-gradient(ellipse at 50% 0%, transparent 0%, rgba(0, 0, 0, 0.30) 100%) top / 100% 60vh no-repeat,
+    radial-gradient(ellipse at 50% 100%, transparent 0%, rgba(0, 0, 0, 0.40) 100%) bottom / 100% 50vh no-repeat;
+}
