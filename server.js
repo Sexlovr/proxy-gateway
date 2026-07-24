@@ -7,8 +7,7 @@ import { initStorage } from './src/storage.js';
 import { providersRouter } from './src/providers.js';
 import { modelsRouter, getAggregatedModels } from './src/models.js';
 import { statsRouter, trackRequest } from './src/stats.js';
-import { handleProxy } from './src/proxy.js';
-import { initSandboxLoader } from './src/sandboxLoader.js';
+import { handleProxy } from './src/bridgeProxy.js';
 import { sandboxApiRouter } from './src/sandboxApi.js';
 
 var __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -73,13 +72,6 @@ try {
   console.error('[boot] Storage init error:', e.message);
 }
 
-try {
-  initSandboxLoader();
-  console.log('[boot] Sandbox loader initialized');
-} catch (e) {
-  console.error('[boot] Sandbox loader init error:', e.message);
-}
-
 app.listen(PORT, '0.0.0.0', function() {
-  console.log('Proxy Gateway live on :' + PORT);
+  console.log('Proxy Gateway (bridge v2) live on :' + PORT);
 });

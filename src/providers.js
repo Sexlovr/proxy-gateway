@@ -12,6 +12,7 @@ import {
   getHistory,
 } from './storage.js';
 import { verifyPassword, verifyProviderAccess } from './auth.js';
+import { invalidate } from './sandbox.js';
 
 export var providersRouter = Router();
 
@@ -87,6 +88,7 @@ providersRouter.post('/', async function(req, res) {
   });
 
   if (!result.ok) return res.status(409).json({ error: result.reason });
+  invalidate(prefix.toLowerCase().trim());
   res.status(201).json({ message: 'Provider "' + prefix + '" created.' });
 });
 
@@ -112,6 +114,7 @@ providersRouter.put('/:prefix', async function(req, res) {
 
   var result = await updateProvider(prefix, updates);
   if (!result.ok) return res.status(404).json({ error: result.reason });
+  invalidate(prefix);
   res.json({ message: 'Updated.', changes: result.changes });
 });
 

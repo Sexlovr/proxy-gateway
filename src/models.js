@@ -1,7 +1,5 @@
 import { Router } from 'express';
 import { getAllProviders, getProvider, getCachedModels, setCachedModels, getAllCachedModels } from './storage.js';
-import { runSandboxCode } from './sandboxRunner.js';
-import { injectKey } from './transformer.js';
 
 export var modelsRouter = Router();
 
@@ -87,36 +85,9 @@ async function fetchModelsFromProvider(provider, key) {
   var page = 0;
   var maxPages = 50;
 
-  // Sandbox Override Logic
-  // Only apply sandbox overrides if the sandbox explicitly opts in via handles_models flag.
-  // Chat-only sandbox code (which sets response_parser for streaming) is ignored here.
-  var sandboxResult = null;
-  if (provider.sandbox_code) {
-    var requestContext = {
-      path: initialUrl,
-      method: 'GET',
-      original_model: '',
-      stripped_model: '',
-      is_models_request: true,
-    };
-    var rawSandbox = runSandboxCode(provider.sandbox_code, {}, {}, provider, requestContext);
-    // Only use sandbox result if it explicitly declared handles_models
-    if (rawSandbox.handled && rawSandbox.handled.models) {
-      sandboxResult = rawSandbox;
-      if (sandboxResult.url) url = sandboxResult.url;
-      else if (sandboxResult.url_path) {
-        url = provider.upstream_url + sandboxResult.url_path;
-      }
-    }
-  }
-
   while (url && page < maxPages) {
     var headers = { 'content-type': 'application/json' };
-
-    if (sandboxResult && sandboxResult.headers) {
-      headers = JSON.parse(JSON.stringify(sandboxResult.headers));
-      if (key) headers = injectKey(headers, key);
-    } else if (key) {
+    if (key) {
       var authType = (provider.auth_type || 'bearer').toLowerCase();
       if (authType === 'bearer') {
         headers[provider.auth_header || 'authorization'] = 'Bearer ' + key;
@@ -128,7 +99,7 @@ async function fetchModelsFromProvider(provider, key) {
     }
 
     var resp = await fetch(url, {
-      method: (sandboxResult && sandboxResult.method) ? sandboxResult.method : 'GET',
+      method: 'GET',
       headers: headers,
       signal: AbortSignal.timeout(60000)
     });
@@ -139,26 +110,6 @@ async function fetchModelsFromProvider(provider, key) {
     }
 
     var json = await resp.json();
-    
-    // Apply Sandbox Response Parser if present
-    if (sandboxResult && sandboxResult.response_parser) {
-        var parser = sandboxResult.response_parser;
-        if (typeof parser === 'string' && parser.startsWith('function')) {
-            try {
-                parser = new Function('return ' + parser)();
-            } catch (e) {
-                console.error('[models] failed to compile sandbox parser:', e.message);
-            }
-        }
-        if (typeof parser === 'function') {
-            try {
-                json = parser(json, 'models');
-            } catch (e) {
-                console.error('[models] sandbox parser error:', e.message);
-            }
-        }
-    }
-
     var pageModels = extractModels(json);
 
     for (var i = 0; i < pageModels.length; i++) {
