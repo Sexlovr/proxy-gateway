@@ -136,7 +136,7 @@ function renderGrid(grid, counts, cloakCard) {
       iconBtn('Open', '↗', () => openDetail(prefix)),
       iconBtn('Edit', '✎', () => openEdit(prefix)),
       iconBtn('Cloak', '🔒', () => openCloak(prefix)),
-      iconBtn('Delete', '✕', () => openDelete(prefix), 'danger'),
+      iconBtn('Delete', TRASH_SVG, () => openDelete(prefix), 'danger'),
     );
     card.appendChild(actions);
     card.addEventListener('click', (e) => {
@@ -173,10 +173,13 @@ function renderGrid(grid, counts, cloakCard) {
 }
 
 function iconBtn(label, icon, onClick, variant = 'ghost') {
-  const btn = h('button', { class: `btn small ${variant}`, type: 'button', 'aria-label': label, title: label }, icon);
+  // Use `html:` (not a string child) so callers may pass either a glyph
+  // (e.g. '↗', '✎') or an inline SVG markup string — both render correctly.
+  const btn = h('button', { class: `btn small ${variant}`, type: 'button', 'aria-label': label, title: label, html: icon });
   btn.addEventListener('click', onClick);
   return btn;
 }
+const TRASH_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>';
 
 async function openDetail(prefix) {
   const modal = openModal(skeleton(8, 24), { size: 'large' });
@@ -230,7 +233,7 @@ function renderDetailModal(prov, history) {
 
   content.appendChild(h('div', { class: 'actions' },
     h('button', { class: 'btn ghost', type: 'button', onclick: () => openEdit(prov.prefix, content.parentElement), html: '✎ Edit' }),
-    h('button', { class: 'btn danger', type: 'button', onclick: () => openDelete(prov.prefix, content.parentElement), html: '✕ Delete' }),
+    h('button', { class: 'btn danger', type: 'button', onclick: () => openDelete(prov.prefix, content.parentElement), html: TRASH_SVG + '<span>Delete</span>' }),
   ));
 }
 
@@ -368,7 +371,7 @@ function openDelete(prefix) {
         h('input', { type: 'password', id: 'delete-pw', placeholder: 'admin password', autocomplete: 'off' }),
       ),
       h('div', { class: 'actions' },
-        h('button', { class: 'btn danger', type: 'button', html: '✕ Delete', onclick: async () => {
+        h('button', { class: 'btn danger', type: 'button', html: TRASH_SVG + '<span>Delete</span>', onclick: async () => {
           const pw = $('#delete-pw').value;
           if (!pw) return toast('Enter admin password', 'error');
           try {

@@ -139,6 +139,11 @@
 .btn.danger:hover {
   background: rgba(var(--rose), 0.22);
   border-color: var(--color-rose);
+  box-shadow: 0 4px 14px rgba(var(--rose), 0.18);
+}
+.btn.danger:active {
+  background: rgba(var(--rose), 0.28);
+  box-shadow: 0 0 0 1px rgba(var(--rose), 0.3) inset;
 }
 
 .btn.success {
@@ -889,6 +894,74 @@ details.disclosure > .disclosure-body {
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.05em;
+}
+
+/* --- Inline-SVG icon sizing inside buttons + close handlers (Terminal Glass polish) --- */
+.btn > svg,
+.btn .btn-icon,
+.toast-x > svg,
+.modal .close > svg {
+  display: block;
+  flex-shrink: 0;
+}
+.btn > svg { width: 14px; height: 14px; opacity: 0.95; }
+.btn.small > svg { width: 12px; height: 12px; }
+.btn.large > svg,
+.btn.icon-only > svg { width: 16px; height: 16px; }
+.modal .close > svg { width: 16px; height: 16px; }
+.toast-x > svg { width: 14px; height: 14px; color: var(--color-text-3); }
+.btn.danger > svg { color: inherit; }
+.btn.ghost > svg { opacity: 0.65; }
+.btn.ghost:hover > svg { opacity: 1; }
+.btn.primary > svg { color: #fff; opacity: 0.95; }
+[data-theme="cyber"] .btn.primary > svg { color: var(--bg-0); }
+
+/* --- Mobile modal becomes a slide-up bottom-sheet for native-app feel --- */
+@keyframes sheet-up {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+@media (max-width: 767px) {
+  .modal {
+    padding: 0;
+    align-items: flex-end;
+  }
+  .modal .content {
+    width: 100%;
+    max-width: 100%;
+    max-height: 88vh;
+    margin: 0;
+    border-radius: var(--r-xl) var(--r-xl) 0 0;
+    border-bottom: none;
+    box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.35);
+    animation: sheet-up var(--dur-3) var(--ease-spring);
+  }
+  .modal .close {
+    top: 12px;
+    right: 12px;
+    width: 34px;
+    height: 34px;
+  }
+  .modal .backdrop { background: rgba(0, 0, 0, 0.55); }
+  /* Toasts sit above the bottom tab bar (64px on mobile) */
+  .toasts {
+    left: var(--sp-3);
+    right: var(--sp-3);
+    bottom: calc(64px + var(--sp-3));
+  }
+  .toast { max-width: 100%; border-radius: var(--r-md); }
+}
+
+/* --- Tablet portrait (768–1023): bento becomes a 6-column grid --- */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .bento {
+    grid-template-columns: repeat(6, 1fr);
+  }
+  .bento > .span-3,
+  .bento > .span-4 { grid-column: span 3; }
+  .bento > .span-6,
+  .bento > .span-8,
+  .bento > .span-9 { grid-column: span 6; }
 }
 
 @media (prefers-reduced-motion: reduce) {

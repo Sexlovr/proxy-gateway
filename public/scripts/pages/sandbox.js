@@ -299,7 +299,7 @@ function renderOutput(container, result) {
 function errorCard(msg) {
   return h('div', { class: 'glass', style: { padding: '16px', border: '1px solid rgba(var(--rose), 0.4)', background: 'rgba(var(--rose-soft))', borderRadius: 'var(--r-md)' } },
     h('div', { class: 'row tight', style: { gap: '8px' } },
-      h('span', { style: { color: 'var(--color-rose)', fontWeight: '700' } }, '✕ Error'),
+      h('span', { style: { color: 'var(--color-rose)', fontWeight: '700', display: 'inline-flex', alignItems: 'center', gap: '6px' }, html: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12" y2="17"/></svg><span>Error</span>' }),
     ),
     h('pre', { style: { marginTop: '8px', fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-xs)' } }, esc(String(msg))),
   );
