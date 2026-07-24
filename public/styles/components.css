@@ -950,6 +950,42 @@ details.disclosure > .disclosure-body {
     bottom: calc(56px + var(--sp-3));
   }
   .toast { max-width: 100%; border-radius: var(--r-md); }
+
+  /* --- A11y: lift tap targets to at least 44×44 (iOS HIG) / 48×48 (Material) --- */
+  input[type="text"], input[type="url"], input[type="password"],
+  input[type="search"], input[type="number"],
+  select {
+    height: 44px;
+    font-size: var(--fs-md);
+  }
+  textarea { min-height: 96px; font-size: var(--fs-sm); }
+  .btn { min-height: 44px; }
+  /* Compact icon-action buttons on provider cards grow to 44×44,
+     not the cramped 30×30 desktop default. */
+  .provider-card .pc-actions { gap: var(--sp-2); }
+  .provider-card .pc-actions .btn,
+  .provider-card .pc-actions .btn.small,
+  .provider-card .pc-actions .btn.icon-only,
+  .provider-card .pc-actions .btn.icon-only.small {
+    width: 44px; height: 44px; padding: 0; min-width: 44px;
+  }
+  .provider-card .pc-actions .btn svg { width: 18px; height: 18px; opacity: 1; }
+
+  /* Checkboxes alone are still ~13px natively → make them tappable */
+  input[type="checkbox"] { width: 22px; height: 22px; }
+
+  /* --- Form rows collapse to single column on phone --- */
+  .field-row { grid-template-columns: 1fr; gap: 0; }
+  .field-row > .field { margin-bottom: var(--sp-4); }
+
+  /* --- Drop the decorative radial-bleed pseudo on stat-cards on phone
+     (it pushes stat-card.scrollWidth to 150% of its clientWidth — wasteful) --- */
+  .stat-card::after { display: none; }
+  .stat-card .stat-value { font-size: var(--fs-2xl); }   /* 26px — was 36px fs-3xl, fits 1 column nicely */
+
+  /* --- Glass cards breathe a little more on phone --- */
+  .glass.card { padding: 20px; }
+  .glass.card-pad-sm { padding: 16px; }
 }
 
 /* --- Tablet portrait (768–1023): bento becomes a 6-column grid --- */
