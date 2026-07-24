@@ -60,7 +60,7 @@ module.exports = function (ctx) {
 
 | Phase         | Available fields                                                            |
 |---------------|-----------------------------------------------------------------------------|
-| `request`     | `ctx = { phase, req, features, provider, context, stream, data }`            |
+| `request`     | `ctx = { phase, req, res, features, provider, context, stream, data }`     |
 | `response`    | adds `ctx.upstream = { status, headers, bodyText, bodyJson?, bodyBuffer }`, `ctx.isStream=false` |
 | `stream_chunk`| adds `ctx.chunkText, ctx.chunkBuffer, ctx.chunkIndex, ctx.isLast, ctx.upstreamEvent`, `ctx.isStream=true` |
 | `stream_end`  | adds `ctx.isLast=true`, `ctx.isStream=true`                                   |
@@ -73,9 +73,39 @@ single request. Use it to carry state from `request` to `response` to
 the original request from the client. Always use `ctx.context.stripped_model`
 for the model name (the proxy prefix has already been stripped).
 
+`ctx.res` is a **safe, write-only wrapper around the downstream Express response**,
+available in every phase. It exposes the same chainable methods as the legacy
+sandbox contract:
+
+```js
+ctx.res.status(200).setHeader('content-type', 'text/event-stream').write('data: {}\n\n');
+ctx.res.end();
+```
+
+| Method        | Behaviour                                                        |
+|---------------|------------------------------------------------------------------|
+| `.status(c)`  | Set HTTP status; returns `ctx.res` (chainable)                  |
+| `.send(d)`    | Send body (string/Buffer/object) and end; returns `ctx.res`      |
+| `.json(d)`    | JSON.stringify + send + end; returns `ctx.res`                  |
+| `.setHeader(k, v)` | Set one response header; returns `ctx.res`                 |
+| `.write(d)`   | Write a chunk without ending; returns `ctx.res`                 |
+| `.end(d?)`    | End the response (optionally writing one final chunk)            |
+
+This is the escape hatch for the `hijack: true` return from the request phase:
+if the proxy halts normal processing, the sandbox can fully own the downstream
+(via `ctx.res`) — emit raw bytes, custom HTTP statuses, multipart outputs,
+long-lived streaming connections, websocket upgrades, etc. The wrapper is
+intentionally stripped of `socket`, `destroy`, and process-exposing methods.
+
 `ctx.provider` is the full provider object minus secret keys (so sandbox code
-cannot leak the API key). The proxy injects `{{KEY}}` into URL/headers/body
-after the request phase returns.
+cannot leak the API key). After the request phase returns, the proxy
+substitutes:
+
+- `{{KEY}}` in the **upstream URL** → `encodeURIComponent(key)` (URL-safe)
+- `{{KEYRAW}}` in the **upstream URL** → the raw key as-is
+- `{{KEY}}` / `{{KEYRAW}}` in **upstream request headers** → raw key as-is
+- `{{KEY}}` / `{{KEYRAW}}` in the **upstream request body** (after JSON stringify) → raw key
+- `{{KEY}}` / `{{KEYRAW}}` in **multipart form-field values + textual form filenames** → raw key
 
 ---
 
@@ -131,6 +161,7 @@ return {
 
   downstream_content_type: 'text/event-stream',  // (optional) override Content-Type for the streamed downstream response. Default derived from downstream_stream_format (e.g. 'sse' -> 'text/event-stream', 'raw' -> 'application/octet-stream'). Useful when the upstream emits native SSE but you pick 'raw' for byte-perfect passthrough.
   trail_done: false,                            // (optional) suppress the OpenAI-style 'data: [DONE]\n\n' trailer that the proxy appends at stream end. Default: emit when downstream_stream_format is 'sse' or 'openai_chat_sse'. Set to false for native Anthropic / custom SSE streams that own their own terminator.
+  stream_error_trailer: '',                     // (optional, advanced) customise the trailer appended when the universal stream loop catches an error mid-stream. Default: '\n[data: stream-error: msg]\n'. Set to false / null to suppress. Set to a string to emit your own trailer (e.g. 'event: ping\ndata: {...}\n\n').
 
   retry_codes: [401, 403, 429, 500, 502, 503], // FULLY replaces default set
   retry_codes_mode: 'replace' | 'merge',          // 'replace' is default in v2
@@ -424,6 +455,35 @@ module.exports = {
   // to raw re-frame which is a no-op when both formats are 'raw'.
 };
 ```
+
+### Hijack: sandbox fully owns the downstream response
+
+When `request()` returns `{ hijack: true }`, the proxy halts all of its normal
+processing (no upstream fetch, no response/stream_chunk phase dispatch). The
+sandbox is then fully responsible for writing the downstream response via
+`ctx.res` (a safe write-only wrapper around Express `res`).
+
+```js
+module.exports = {
+  universal: true,
+  request: function (ctx) {
+    // E.g. synchronously stream back a synthetic Anthropic-style SSE without
+    // touching any upstream at all.
+    ctx.res.status(200)
+           .setHeader('content-type', 'text/event-stream')
+           .setHeader('cache-control', 'no-cache');
+    ctx.res.write('event: message_start\ndata: {"type":"message_start",...}\n\n');
+    ctx.res.write('event: message_stop\ndata: {"type":"message_stop"}\n\n');
+    ctx.res.end();
+    return { hijack: true, endpoint_type: 'raw' };
+  }
+};
+```
+
+`ctx.res` is available in every phase (not just in hijack mode), but in normal
+flow the proxy owns the response — calling `ctx.res.*` mid-flow will collide
+with the proxy's own writes. Use it exclusively in hijack mode unless you
+really know what you're doing.
 
 ---
 

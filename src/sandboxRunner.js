@@ -416,6 +416,7 @@ export function createSandboxSession(code, opts) {
     var base = {
       phase: null,
       req: opts.req || null,
+      res: buildSafeResProp(opts.res || null),
       features: opts.features || {},
       provider: buildSafeProvider(opts.provider || {}),
       context: opts.context || {},
@@ -426,6 +427,22 @@ export function createSandboxSession(code, opts) {
       for (var k in extra) base[k] = extra[k];
     }
     return base;
+  }
+
+  // Mirror of the legacy safe-res wrapper (see runSandboxCode): exposes write-only
+  // methods status/send/json/setHeader/end/write on a chained object so universal
+  // sandbox code can drive the downstream response directly when it opts into
+  // hijack mode. No socket/process exposure.
+  function buildSafeResProp(expressRes) {
+    if (!expressRes) return null;
+    var safe = {};
+    safe.status = function (c) { try { expressRes.status(c); } catch (e) {} return safe; };
+    safe.send = function (d) { try { expressRes.send(d); } catch (e) {} return safe; };
+    safe.json = function (d) { try { expressRes.json(d); } catch (e) {} return safe; };
+    safe.setHeader = function (k, v) { try { expressRes.setHeader(k, v); } catch (e) {} return safe; };
+    safe.end = function (d) { try { expressRes.end(d); } catch (e) {} };
+    safe.write = function (d) { try { expressRes.write(d); } catch (e) {} return safe; };
+    return safe;
   }
 
   // Apply per-phase wall-clock timeout. Silent if times out (returns { __timedOut: true }).
@@ -457,7 +474,7 @@ export function createSandboxSession(code, opts) {
   async function dispatchRequest() {
     if (asObject && typeof phaseFn.request !== 'function') return null;
     var c = buildContextObject({});
-    var r = await withTimeout(function () { return callPhase('request', c); }, 5000);
+    var r = await withTimeout(function () { return callPhase('request', c); }, 30000);
     if (r && r.__timedOut) return { __timedOut: true, trace: trace };
     return normalizeRequestResult(r);
   }
@@ -484,7 +501,7 @@ export function createSandboxSession(code, opts) {
       },
       isStream: false,
     });
-    var r = await withTimeout(function () { return callPhase('response', c); }, 5000);
+    var r = await withTimeout(function () { return callPhase('response', c); }, 30000);
     if (r && r.__timedOut) return { __timedOut: true, trace: trace };
     return normalizeResponseResult(r, bodyText, bodyBuffer, upstream);
   }
@@ -500,7 +517,7 @@ export function createSandboxSession(code, opts) {
       upstreamEvent: chunkInfo.upstreamEvent || '',
       isStream: true,
     });
-    var r = await withTimeout(function () { return callPhase('stream_chunk', c); }, 2000);
+    var r = await withTimeout(function () { return callPhase('stream_chunk', c); }, 5000);
     if (r && r.__timedOut) return { __timedOut: true, trace: trace };
     return normalizeStreamChunkResult(r);
   }

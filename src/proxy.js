@@ -167,6 +167,7 @@ export async function handleProxy(req, res) {
     var allowedHosts = buildAllowedHosts(provider);
     session = createSandboxSession(resolved.code, {
       req: body,
+      res: res,
       features: {}, // legacy features are parsed by transformRequest - we pass through empty for v2 path
       provider: provider,
       context: {
@@ -252,12 +253,22 @@ async function universalHandler(req, res, provider, prefix, strippedModel, model
         parts.push('Content-Disposition: form-data; name="' + f.name + '"; filename="' + f.filename + '"\r\n');
         parts.push('Content-Type: ' + (f.contentType || 'application/octet-stream') + '\r\n\r\n');
         if (f.body instanceof Buffer) parts.push(f.body);
-        else if (typeof f.body === 'string') parts.push(Buffer.from(f.body));
-        else parts.push(Buffer.from(String(f.body)));
+        else if (typeof f.body === 'string') {
+          // Substitute {{KEY}} in textual form-field bodies too
+          var bodyVal = f.body;
+          if (bodyVal.indexOf('{{KEY}}') !== -1 || bodyVal.indexOf('{{KEYRAW}}') !== -1) {
+            bodyVal = bodyVal.replace(/{{KEYRAW}}/g, key).replace(/{{KEY}}/g, key);
+          }
+          parts.push(Buffer.from(bodyVal));
+        } else parts.push(Buffer.from(String(f.body)));
         parts.push(Buffer.from('\r\n'));
       } else {
         parts.push('Content-Disposition: form-data; name="' + f.name + '"\r\n\r\n');
-        parts.push(Buffer.from(String(f.value) + '\r\n'));
+        var fVal = (typeof f.value === 'string') ? f.value : String(f.value);
+        if (fVal.indexOf('{{KEY}}') !== -1 || fVal.indexOf('{{KEYRAW}}') !== -1) {
+          fVal = fVal.replace(/{{KEYRAW}}/g, key).replace(/{{KEY}}/g, key);
+        }
+        parts.push(Buffer.from(fVal + '\r\n'));
       }
     }
     parts.push(Buffer.from('--' + boundary + '--\r\n'));
@@ -322,6 +333,12 @@ async function universalHandler(req, res, provider, prefix, strippedModel, model
       } else if (requestDescriptor.body !== undefined && requestDescriptor.body !== null) {
         if (typeof requestDescriptor.body === 'string') fetchOpts.body = requestDescriptor.body;
         else fetchOpts.body = JSON.stringify(requestDescriptor.body);
+        // Substitute {{KEY}} / {{KEYRAW}} in the JSON-stringified body with the raw API key.
+        // (URL-encoding would be inappropriate inside JSON / text bodies.)
+        if (typeof fetchOpts.body === 'string' &&
+            (fetchOpts.body.indexOf('{{KEY}}') !== -1 || fetchOpts.body.indexOf('{{KEYRAW}}') !== -1)) {
+          fetchOpts.body = fetchOpts.body.replace(/{{KEYRAW}}/g, key).replace(/{{KEY}}/g, key);
+        }
       }
     }
 
@@ -650,7 +667,15 @@ async function universalStreamDownstream(req, res, session, upstream, prefix, ip
     }
   } catch (err) {
     console.error('[proxy-universal] stream error:', err.message);
-    try { res.write('\n[data: stream-error: ' + err.message + ']\n'); } catch (e) {}
+    // Sandbox can override the trailer appended on stream errors via reqResult.stream_error_trailer:
+    //   undefined / not set -> current default '[data: stream-error: msg]'
+    //   string                -> use that string as-is
+    //   false / null          -> suppress the trailer entirely
+    var errTrailer;
+    if (reqResult && typeof reqResult.stream_error_trailer === 'string') errTrailer = reqResult.stream_error_trailer;
+    else if (reqResult && (reqResult.stream_error_trailer === false || reqResult.stream_error_trailer === null)) errTrailer = null;
+    else errTrailer = '\n[data: stream-error: ' + err.message + ']\n';
+    try { if (errTrailer) res.write(errTrailer); } catch (e) {}
   } finally {
     try { res.end(); } catch (e) {}
   }
