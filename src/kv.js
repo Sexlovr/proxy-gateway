@@ -11,7 +11,15 @@
 import fs from 'fs';
 import path from 'path';
 
-const KV_DATA_DIR = process.env.KV_DATA_DIR || (process.env.HF_HOME ? path.join(process.env.HF_HOME, 'kv') : '/app/data/kv');
+// KV storage dir alignment: prefer `KV_DATA_DIR` if explicit; otherwise fall
+// back to `<DATA_DIR>/kv` so per-provider sandbox state survives factory
+// rebuilds exactly like providers.json on the live HF Space (Dockerfile
+// sets `DATA_DIR=/data`). The historical `/app/data/kv` default is kept
+// only when `DATA_DIR` is absent to preserve bare-env behaviour.
+const KV_DATA_DIR = process.env.KV_DATA_DIR
+  || (process.env.DATA_DIR ? path.join(process.env.DATA_DIR, 'kv')
+      : (process.env.HF_HOME ? path.join(process.env.HF_HOME, 'kv')
+          : '/app/data/kv'));
 const stores = new Map();                                                      // prefix → KV instance
 
 export function openStore(prefix) {

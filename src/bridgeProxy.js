@@ -115,8 +115,12 @@ export async function handleProxy(req, res) {
     }
   } catch (err) {
     if (res.headersSent) {
-      // Mid-stream error: best-effort trailer
-      try { res.write('\n[data: sandbox-error: ' + err.message + ']\n'); } catch (_) {}
+      // Mid-stream error: best-effort trailer. We deliberately do not
+      // include the raw err.message — in upstream-validation paths it
+      // can contain secret material (rejected header values, API keys,
+      // auth echoes). A neutral trailer is safer and the structured log
+      // already has the full message for internal inspection.
+      try { res.write('\n[data: sandbox-error: see proxy logs]\n'); } catch (_) {}
       try { res.end(); } catch (_) {}
     } else {
       log.error({ prefix, requestId, err: err.message, stack: err.stack }, 'sandbox request threw');

@@ -1,5 +1,14 @@
 // log.js — tiny structured logger bound to request id + provider prefix.
 // Plugins sandbox code through ctx.log; admin code via `log` directly.
+//
+// API is pino-style and accepts both forms:
+//   log.error({ meta: 'object' }, 'message string')
+//   log.error('message string', { meta: 'object' })
+//   log.error('message string without meta')
+//   log.error({ only: 'meta' })  // no message; treated as meta + msg omitted
+// The first token in argument order that's a string is treated as `msg`,
+// the first token that's an object is treated as `meta`. (Numbers /
+// booleans are coerced into meta if both args are scalars.)
 
 import { getAllProviders, getProvider, addProvider, updateProvider, deleteProvider } from './storage.js';
 import { verifyPassword } from './auth.js';
@@ -8,22 +17,41 @@ import { invalidate } from './sandbox.js';
 let _seq = 0;
 function nextSeq() { _seq = (_seq + 1) % 0xffff; return _seq; }
 
+function normalizePinoArgs(a, b) {
+  // Detect pino-style: meta object + message string (in either order).
+  // Falls back gracefully for string-only / object-only / no-arg forms.
+  if (a == null && b == null) return { msg: undefined, meta: {} };
+  const aIsStr = typeof a === 'string';
+  const bIsStr = typeof b === 'string';
+  const aIsObj = a !== null && typeof a === 'object' && !Array.isArray(a);
+  const bIsObj = b !== null && typeof b === 'object' && !Array.isArray(b);
+  if (aIsStr && bIsObj) return { msg: a, meta: b };                 // log.x('msg', {...})
+  if (aIsObj && bIsStr) return { msg: b, meta: a };                 // log.x({...}, 'msg') — pino
+  if (aIsStr && b == null) return { msg: a, meta: {} };             // log.x('msg')
+  if (aIsObj && b == null) return { msg: undefined, meta: a };     // log.x({...}) — meta only
+  // Both strings? treat first as msg, second as a weird scalar meta.
+  if (aIsStr && bIsStr) return { msg: a, meta: { value: b } };
+  // Last-ditch fallbacks
+  if (a != null && b == null) return { msg: String(a), meta: {} };
+  return { msg: a == null ? undefined : String(a), meta: b == null ? {} : (b || {}) };
+}
+
 const _baseLogger = {
   _bind: {},
   child(bindings) {
     return Object.assign({}, this, { _bind: Object.assign({}, this._bind, bindings) });
   },
-  _write(level, msg, meta) {
+  _write(level, msgOrMeta, metaOrMsg) {
+    const { msg, meta } = normalizePinoArgs(msgOrMeta, metaOrMsg);
     const line = JSON.stringify({ seq: nextSeq(), ts: Date.now(), level, msg, ...this._bind, ...meta });
-    // pino-ish single-line JSON; streamed to STDOUT.
     if (level === 'error') console.error(line);
     else if (level === 'warn') console.warn(line);
     else console.log(line);
   },
-  info(msg, meta)  { this._write('info',  msg, meta || {}); },
-  warn(msg, meta)  { this._write('warn',  msg, meta || {}); },
-  error(msg, meta) { this._write('error', msg, meta || {}); },
-  debug(msg, meta) { this._write('debug', msg, meta || {}); },
+  info(a, b)  { this._write('info',  a, b); },
+  warn(a, b)  { this._write('warn',  a, b); },
+  error(a, b) { this._write('error', a, b); },
+  debug(a, b) { this._write('debug', a, b); },
 };
 
 export const log = _baseLogger.child({});

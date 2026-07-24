@@ -481,21 +481,31 @@ proxy-gateway/
 ├── package.json
 ├── README.md
 ├── server.js              ← Entry point + inline dashboard
+├── docs/
+│   ├── BRIDGE-DESIGN.md  ← Bridge-v2 contract spec (the architecture doc)
+│   └── SANDBOX.md        ← Sandbox authoring guide
+├── public/               ← Dashboard SPA (vanilla JS, no build step)
+│   ├── app.js
+│   └── scripts/         ← Per-page modules (api, dashboard, providers, ...​)
+├── sandboxes/           ← On-disk sandbox_code files (sandbox_file slug → here)
 ├── src/
 │   ├── auth.js            ← Password verification
-│   ├── features.js        ← [think=...] [search=...] tag parser
+│   ├── bridgeProxy.js     ← Pure-bridge dispatcher (parses prefix, hands ctx to sandbox)
+│   ├── defaultSandbox.js  ← Canonical OpenAI-compat passthrough (used when no sandbox_code set)
 │   ├── keyManager.js      ← Compound key parser + round-robin
+│   ├── kv.js              ← Per-provider file-backed KV store (ctx.store)
+│   ├── log.js             ← Structured logger (ctx.log) + sandbox→proxy callbacks (ctx.proxy)
 │   ├── models.js          ← Model fetching + aggregation
 │   ├── providers.js       ← Provider CRUD + cloaking routes
-│   ├── proxy.js           ← Wildcard proxy handler
-│   ├── sandboxRunner.js   ← VM-sandboxed code execution
+│   ├── sandbox.js         ← Hot-reload loader (inline eval + .cjs fallback + cache)
+│   ├── sandboxApi.js      ← /sandbox/test (exec sandbox with mock ctx) + /sandbox/files
 │   ├── stats.js           ← Request tracking + stats API
-│   ├── storage.js         ← JSON file persistence
-│   └── transformer.js     ← Request transformation pipeline
-└── data/                  ← Persistent storage (mounted volume)
+│   └── storage.js         ← JSON file persistence (providers / stats / history)
+└── data/                  ← Persistent storage (mounted volume on HF Space)
     ├── providers.json
     ├── stats.json
-    └── history.json
+    ├── history.json
+    └── kv/<prefix>/       ← Per-provider sandbox KV (openStore)
 ```
 
 ---

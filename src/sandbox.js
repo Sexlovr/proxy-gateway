@@ -149,7 +149,7 @@ async function _resolveFile(fileName) {
     throw new Error('sandbox_file ' + fileName + ' must export either an async function `request(ctx)` or an object `{ request: async function () {} }`');
   }
   const exportsObj = (typeof mod === 'function')
-    ? { request: mod, default: mod, ...(mod && mod.default ? {} : {}) }
+    ? { request: mod, default: mod }
     : mod;
   fileCache.set(cacheKey, { exports: exportsObj, mtime: stat.mtimeMs, ts: Date.now() });
   return exportsObj;
@@ -180,7 +180,7 @@ async function _resolveDefault() {
 export function listSandboxFiles() {
   if (!fs.existsSync(SANDBOXES_DIR)) return [];
   return fs.readdirSync(SANDBOXES_DIR)
-    .filter((f) => f.endsWith('.js'))
+    .filter((f) => f.endsWith('.js') || f.endsWith('.cjs'))
     .map((f) => ({ name: f, mtime: fs.statSync(path.join(SANDBOXES_DIR, f)).mtimeMs }));
 }
 
