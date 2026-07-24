@@ -129,6 +129,9 @@ return {
   upstream_stream_format:   'sse' | 'ndjson' | 'json_lines' | 'chunked_json' | 'raw' | 'none',
   downstream_stream_format: same set + 'openai_chat_sse',
 
+  downstream_content_type: 'text/event-stream',  // (optional) override Content-Type for the streamed downstream response. Default derived from downstream_stream_format (e.g. 'sse' -> 'text/event-stream', 'raw' -> 'application/octet-stream'). Useful when the upstream emits native SSE but you pick 'raw' for byte-perfect passthrough.
+  trail_done: false,                            // (optional) suppress the OpenAI-style 'data: [DONE]\n\n' trailer that the proxy appends at stream end. Default: emit when downstream_stream_format is 'sse' or 'openai_chat_sse'. Set to false for native Anthropic / custom SSE streams that own their own terminator.
+
   retry_codes: [401, 403, 429, 500, 502, 503], // FULLY replaces default set
   retry_codes_mode: 'replace' | 'merge',          // 'replace' is default in v2
 
@@ -385,6 +388,40 @@ module.exports = {
   response: function (ctx) {
     return { passthrough: true };
   }
+};
+```
+
+### Byte-perfect passthrough (provider already speaks the downstream format natively)
+
+When the upstream already emits exactly the bytes the downstream client expects — no
+translation, no reframing, no injected trailers. Use `upstream_stream_format: 'raw'` +
+`downstream_stream_format: 'raw'` so the proxy streams bytes through verbatim, then pair
+with `downstream_content_type` to fix the Content-Type (default for 'raw' is
+`application/octet-stream`, which breaks SSE clients), and `trail_done: false` to suppress
+the `'data: [DONE]\n\n'` trailer that the proxy would inject for `sse`/`openai_chat_sse`.
+You can still route per-path and rewrite the body in the `request` phase.
+
+```js
+module.exports = {
+  universal: true,
+  request: function (ctx) {
+    // Route inbound /v1/messages -> upstream /v1/messages verbatim
+    var intent = /\/v1\/messages/.test(ctx.context.path || '') ? 'messages' : 'chat';
+    return {
+      url_path: intent === 'messages' ? '/v1/messages' : '/v1/chat/completions',
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'authorization': 'Bearer {{KEY}}' },
+      body: ctx.req,
+      endpoint_type: intent === 'messages' ? 'raw' : 'chat',
+      upstream_stream_format: 'raw',     // don't parse upstream SSE into frames
+      downstream_stream_format: 'raw',   // don't re-frame downstream — pass bytes through
+      downstream_content_type: 'text/event-stream',  // override default octet-stream
+      trail_done: false,                 // upstream emits its own terminator (e.g. event: message_stop)
+      retry_codes: [401, 403, 429, 500, 502, 503]
+    };
+  }
+  // No response / stream_chunk phases: response() defaults to passthrough, stream_chunk
+  // to raw re-frame which is a no-op when both formats are 'raw'.
 };
 ```
 

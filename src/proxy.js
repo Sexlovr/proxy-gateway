@@ -357,7 +357,7 @@ async function universalHandler(req, res, provider, prefix, strippedModel, model
     try {
       if (streamIntent && (isSSE || upstreamStreamFormat)) {
         await universalStreamDownstream(req, res, session, upstream, prefix, ip, strippedModel, modelRaw,
-          upstreamStreamFormat, downstreamStreamFormat, clientWantsStream);
+          upstreamStreamFormat, downstreamStreamFormat, clientWantsStream, reqResult);
       } else {
         var result = await universalBufferedDownstream(req, res, session, upstream, prefix, ip, strippedModel, modelRaw, true);
 
@@ -538,11 +538,23 @@ function flushPassthrough(res, upstream, bodyBuffer, respResult) {
 
 // Streamed universal downstream
 async function universalStreamDownstream(req, res, session, upstream, prefix, ip, strippedModel, modelRaw,
-  upstreamStreamFormat, downstreamStreamFormat, clientWantsStream) {
+  upstreamStreamFormat, downstreamStreamFormat, clientWantsStream, reqResult) {
+  reqResult = reqResult || {};
+
+  // Sandbox may override the downstream content-type (e.g. "text/event-stream")
+  // when choosing byte-perfect 'raw' passthrough. Default derived from format otherwise.
+  var downstreamContentType = (reqResult.downstream_content_type && typeof reqResult.downstream_content_type === 'string')
+    ? reqResult.downstream_content_type
+    : mapDownstreamContentType(downstreamStreamFormat);
+
+  // Sandbox may suppress the OpenAI-style 'data: [DONE]\n\n' trailer.
+  // Default behaviour (emit for sse / openai_chat_sse) preserved for backward compat.
+  var trailDone = reqResult.trail_done !== false
+    && (downstreamStreamFormat === 'openai_chat_sse' || downstreamStreamFormat === 'sse');
+
   // Downstream headers
   res.status(upstream.status);
-  var downContentType = mapDownstreamContentType(downstreamStreamFormat);
-  res.setHeader('content-type', downContentType);
+  res.setHeader('content-type', downstreamContentType);
   res.setHeader('cache-control', 'no-cache');
   res.setHeader('connection', 'keep-alive');
 
@@ -616,8 +628,8 @@ async function universalStreamDownstream(req, res, session, upstream, prefix, ip
         if (!processed || processed.__timedOut) continue;
         if (processed.done) {
           await session.dispatchStreamEnd();
-          // Ensure downstream closes cleanly per downstream format
-          if (downstreamStreamFormat === 'openai_chat_sse' || downstreamStreamFormat === 'sse') {
+          // Ensure downstream closes cleanly per downstream format (or sandbox suppressed it)
+          if (trailDone) {
             res.write('data: [DONE]\n\n');
           }
           return;
@@ -633,7 +645,7 @@ async function universalStreamDownstream(req, res, session, upstream, prefix, ip
 
     // Stream ended naturally; notify sandbox via stream_end
     await session.dispatchStreamEnd();
-    if (downstreamStreamFormat === 'openai_chat_sse' || downstreamStreamFormat === 'sse') {
+    if (trailDone) {
       res.write('data: [DONE]\n\n');
     }
   } catch (err) {
