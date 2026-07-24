@@ -383,16 +383,23 @@ code, pre, kbd { font-family: var(--font-mono); }
 
 /* --- responsive: mobile (<768) --- */
 @media (max-width: 767px) {
+  /* 3-row shell — topbar above, content middle, bottom tab bar */
   .app-shell {
-    grid-template-rows: var(--topbar-h) 1fr 64px;
+    grid-template-rows: var(--topbar-h) 1fr 56px;
     grid-template-columns: 1fr;
     grid-template-areas: "topbar" "main" "sidebar";
   }
   .app-main { padding: var(--sp-4); min-width: 0; overflow-x: hidden; }
 
-  /* topbar — must NOT push the grid track wider than the viewport (or
-     the sidebar + main overflow off the right edge, hidden by body). */
-  .topbar { min-width: 0; padding: 0 var(--sp-3); gap: var(--sp-2); }
+  /* topbar — compact, must NOT push the grid track wider than viewport */
+  .topbar {
+    min-width: 0;
+    padding: 0 var(--sp-3);
+    gap: var(--sp-2);
+    background: linear-gradient(180deg, rgba(var(--bg-1), 0.94) 0%, rgba(var(--bg-1), 0.66) 100%);
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+  }
   .topbar .brand { gap: var(--sp-1); font-size: var(--fs-md); }
   .topbar .brand svg { width: 20px; height: 20px; }
   .topbar .brand .accent { display: none; }      /* drop "Gateway" word on phone */
@@ -412,39 +419,74 @@ code, pre, kbd { font-family: var(--font-mono); }
 
   .page { max-width: 100%; }
 
+  /* bottom tab bar — icon-only. 6 tabs × ~52px → fits every phone ≥320.
+     Use `display:contents` on nav-groups so all 6 nav-items become direct
+     children of the bar's flex row, each getting equal share of width. */
   .sidebar {
     flex-direction: row;
+    justify-content: space-around;
     top: auto;
-    height: 64px;
-    overflow-x: auto;
-    overflow-y: hidden;
+    height: 56px;
+    overflow: visible;
+    overflow-x: hidden;
     padding: var(--sp-1) var(--sp-2);
-    gap: var(--sp-1);
+    gap: 0;
     border-right: 0;
     border-top: 1px solid rgba(var(--glass-border));
+    background: linear-gradient(180deg, rgba(var(--bg-1), 0.66) 0%, rgba(var(--bg-1), 0.94) 100%);
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
     align-items: center;
   }
+  .sidebar .nav-group + .nav-group { margin-top: 0; }
+  .sidebar .nav-group { margin: 0; display: contents; }
+  .sidebar .nav-label,
+  .sidebar .footer { display: none !important; }
   .sidebar .nav-item {
-    flex: 0 0 auto;
+    flex: 1 1 0;
+    min-width: 0;
+    width: auto;
     height: 48px;
-    padding: 0 var(--sp-3);
-    min-width: 56px;
+    padding: 0;
     flex-direction: column;
-    gap: 2px;
-    font-size: var(--fs-2xs);
+    gap: 0;
+    border-radius: var(--r-md);
+    border: 1px solid transparent;
+    align-items: center;
+    justify-content: center;
   }
-  .sidebar .nav-item .label {
-    display: block;
-    font-size: var(--fs-2xs);
+  .sidebar .nav-item .label { display: none; }   /* icons only */
+  .sidebar .nav-item .icon { width: 22px; height: 22px; opacity: 0.78; }
+  .sidebar .nav-item.active {
+    color: var(--color-text-0);
+    background: rgba(var(--accent-glow-rgb), 0.16);
+    box-shadow: 0 0 0 1px rgba(var(--accent-glow-rgb), 0.32) inset;
   }
-  .sidebar .nav-item .icon { width: 18px; height: 18px; }
+  .sidebar .nav-item.active .icon { opacity: 1; }
+  .sidebar .nav-item .live {
+    margin: 0;
+    position: absolute;
+    top: 6px;
+    right: calc(50% - 18px);
+    width: 6px;
+    height: 6px;
+  }
+
   .bento { display: flex; flex-direction: column; }
   .page-head { flex-direction: column; align-items: stretch; }
+
+  /* Aurora debounce — lighter on phone to spare the GPU */
+  .aurora { opacity: 0.35; }
+  .vignette { opacity: 0.5; }
 }
 
-/* --- responsive: tiny phone (<380) --- */
-@media (max-width: 379px) {
-  .topbar .github-link { display: none; }
+/* --- responsive: very small phone (<375) --- */
+@media (max-width: 374px) {
+  .topbar .brand > span { display: none; }   /* drop "Proxy" word — show ⚡ icon only */
+  .topbar { padding: 0 var(--sp-2); gap: var(--sp-1); }
+  .topbar .theme-toggle { width: 60px; height: 32px; }
+  .topbar .github-link,
+  .topbar .spotlight-trigger { width: 32px; height: 32px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

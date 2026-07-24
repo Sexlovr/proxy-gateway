@@ -943,11 +943,11 @@ details.disclosure > .disclosure-body {
     height: 34px;
   }
   .modal .backdrop { background: rgba(0, 0, 0, 0.55); }
-  /* Toasts sit above the bottom tab bar (64px on mobile) */
+  /* Toasts sit above the bottom tab bar (56px on mobile) */
   .toasts {
     left: var(--sp-3);
     right: var(--sp-3);
-    bottom: calc(64px + var(--sp-3));
+    bottom: calc(56px + var(--sp-3));
   }
   .toast { max-width: 100%; border-radius: var(--r-md); }
 }
