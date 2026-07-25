@@ -7,6 +7,16 @@ import { parseCompoundKeys } from './keyManager.js';
 export async function request(ctx) {
   const { req, res, provider, keys, key, nextKey, fetch, log, signal, stripped } = ctx;
 
+  // ── Sandbox-owned 401: the bridge no longer early-rejects missing-key
+  // requests, so it lands here. If neither inbound headers nor
+  // provider.optional_key produced a usable key, this is the auth error.
+  if (!keys || keys.length === 0) {
+    if (!res.headersSent) {
+      res.status(401).json({ error: { message: 'No API keys for prefix "' + ctx.prefix + '" in inbound headers. Send keys as: Authorization: Bearer ' + ctx.prefix + '=key1,key2 (or any header carrying that compound form). Alternatively set an `optional_key` on the provider or list `inbound_key_headers` for bare-key SDKs.', type: 'auth_error' } });
+    }
+    return;
+  }
+
   // ── Body prep ───────────────────────────────────────────────────────────
   // Sandbox receives express.json()'d body. Re-stringify upstream. If `model`
   // field has the prefix still attached (e.g. "ms:zai-org/GLM-5.2"), replace
@@ -23,18 +33,24 @@ export async function request(ctx) {
     : Buffer.from(JSON.stringify(bodyObj), 'utf8');
 
   // ── Headers ────────────────────────────────────────────────────────────────
+  // The bridge pre-computes a complete stripInbound list (incl. the headers
+  // whose compound-form value yielded keys for THIS prefix in the wide scan)
+  // — sandboxes should just trust it and iterate.
+  const stripList = (ctx.clientAuth && Array.isArray(ctx.clientAuth.stripInbound))
+    ? ctx.clientAuth.stripInbound
+    : [];
   const authType = (provider.auth_type || 'bearer').toLowerCase();
   const authHeader = provider.auth_header || 'authorization';
   function buildHeaders(k) {
     const h = Object.assign({}, req.headers);
-    for (const k2 of ['content-length', 'host', 'connection', 'accept-encoding']) delete h[k2];
+    // Strip hop-by-hop + everything in the bridge-supplied inbound auth list.
+    for (const hop of ['content-length', 'host', 'connection', 'accept-encoding']) delete h[hop];
+    for (const ah of stripList) delete h[String(ah).toLowerCase()];
     if (k) {
       if (authType === 'bearer')        h[authHeader] = 'Bearer ' + k;
       else if (authType === 'x-api-key') h['x-api-key'] = k;
       else if (authType === 'basic')     h[authHeader] = 'Basic ' + k;
       else                                h[authHeader] = k;
-    } else {
-      delete h[authHeader]; delete h['x-api-key'];
     }
     if (body !== undefined && !h['content-type']) h['content-type'] = 'application/json';
     return h;

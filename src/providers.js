@@ -80,6 +80,8 @@ providersRouter.post('/', async function(req, res) {
     sandbox_code: body.sandbox_code || null,
     sandbox_file: body.sandbox_file || null,
     allowed_hosts: Array.isArray(body.allowed_hosts) ? body.allowed_hosts : null,
+    inbound_key_headers: Array.isArray(body.inbound_key_headers) ? body.inbound_key_headers : [],
+    default_timeout_ms: body.default_timeout_ms === undefined ? null : body.default_timeout_ms,
     think_config: parsedThinkConfig,
     search_config: parsedSearchConfig,
     cloaked: body.cloaked || false,

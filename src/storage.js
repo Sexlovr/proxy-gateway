@@ -100,6 +100,8 @@ export async function addProvider(provider) {
   provider.sandbox_code = provider.sandbox_code || null;
   provider.sandbox_file = provider.sandbox_file || null;
   provider.allowed_hosts = Array.isArray(provider.allowed_hosts) ? provider.allowed_hosts : [];
+  provider.inbound_key_headers = Array.isArray(provider.inbound_key_headers) ? provider.inbound_key_headers : [];
+  provider.default_timeout_ms = (provider.default_timeout_ms === undefined || provider.default_timeout_ms === null) ? null : Number(provider.default_timeout_ms);
 
   cache.providers[prefix] = Object.assign({}, provider, {
     created_at: new Date().toISOString(),

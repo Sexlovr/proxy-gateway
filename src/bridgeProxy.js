@@ -20,6 +20,32 @@ import { log, proxyAdminApi } from './log.js';
 const DEFAULT_TIMEOUT_MS = 300_000;
 const counters = {};
 
+// Plausible inbound client auth-header names. Stripping these from OUTBOUND
+// prevents the proxy from leaking a client's own MS key (or an unrelated SDK's
+// token-format echo like `anthropic-api-key: <their-claude-key>`) to upstream.
+const INBOUND_AUTH_STRIP = [
+  'authorization', 'proxy-authorization',
+  'x-api-key', 'x-anthropic-api-key', 'anthropic-api-key', 'api-key',
+];
+
+function buildStripInboundList(provider, contributedHeaders) {
+  const seen = new Set(INBOUND_AUTH_STRIP.map(s => s.toLowerCase()));
+  const out = INBOUND_AUTH_STRIP.slice();
+  if (Array.isArray(provider.inbound_key_headers)) {
+    for (const hn of provider.inbound_key_headers) {
+      const k = String(hn).toLowerCase();
+      if (!seen.has(k)) { seen.add(k); out.push(k); }
+    }
+  }
+  if (contributedHeaders) {
+    for (const hn of Object.keys(contributedHeaders)) {
+      const k = hn.toLowerCase();
+      if (!seen.has(k)) { seen.add(k); out.push(k); }
+    }
+  }
+  return out;
+}
+
 export async function handleProxy(req, res) {
   // ── health, dashboard SPA, /api, /sandbox: not us ─────────────────────
   if (req.path.startsWith('/api/') || req.path.startsWith('/v1/models') || req.path.startsWith('/sandbox/')) {
@@ -43,40 +69,109 @@ export async function handleProxy(req, res) {
   // Cloak check (preserves visibility behaviour without legacy compat)
   if (provider.cloaked) return res.status(404).json({ error: { message: 'Not found', type: 'proxy_error' } });
 
-  // ── 3) Parse `<prefix>=<keys-csv>` or fallback to bare Bearer ─────────
-  // Accept keys from Authorization: Bearer ... OR Anthropic-style headers
-  // (x-api-key / x-anthropic-api-key / anthropic-api-key). Claude Code uses
-  // x-api-key by default; OpenAI-style clients use Authorization: Bearer.
-  const rawAuth = req.headers['authorization'] || '';
-  const rawKeyHdr = req.headers['x-api-key'] || req.headers['x-anthropic-api-key'] || req.headers['anthropic-api-key'] || '';
-  const rawAuthAny = rawAuth || rawKeyHdr;
-  const compound = parseCompoundKeys(rawAuth);
-  if (rawKeyHdr) Object.assign(compound, parseCompoundKeys(rawKeyHdr));
+  // ── 3) WIDE-SCAN inbound auth: parse EVERY header for the compound form
+  // `<prefix>=<keys-csv>`. No allowlist — anything from Authorization to
+  // X-Goog-Api-Key to x-deepseek-key to x-claude-key is accepted, as long as
+  // the VALUE contains the `prefix=key1,key2` pattern. This is the future-
+  // proof inbound side: future SDKs with weird header names just work.
+  //
+  // In addition, a per-provider `inbound_key_headers` array may name headers
+  // whose bare VALUE is the key (no `prefix=` form required). Useful for
+  // closed SDKs that don't know the proxy contract.
+  //
+  // The bridge NEVER early-401s the client here: it passes whatever it found
+  // (possibly `[]`) into ctx, and the SANDBOX owns the upstream auth decision.
+  // The default passthrough sandbox emits a 401 itself if it ends up with no
+  // keys. Per-provider sandboxes may decide differently (they have raw req.headers
+  // via ctx.clientAuth.headers if they want a totally custom auth scheme).
+  const compound = {};
+  const scanned = {};
+  const contributedHeaders = {};        // header-name → true, for headers that YIELDED keys for this prefix
+  for (const [hname, hvalRaw] of Object.entries(req.headers)) {
+    if (hvalRaw == null) continue;
+    const hval = Array.isArray(hvalRaw) ? hvalRaw.join(', ') : String(hvalRaw);
+    if (!hval) continue;
+    const parsed = parseCompoundKeys(hval);
+    scanned[hname] = parsed;
+    for (const pfx of Object.keys(parsed)) {
+      if (!compound[pfx]) compound[pfx] = [];
+      compound[pfx] = compound[pfx].concat(parsed[pfx]);
+      if (pfx === prefix) contributedHeaders[hname] = true;     // strip this from OUTBOUND
+    }
+  }
   let keys = compound[prefix] || [];
-  if (keys.length === 0 && rawAuth.replace(/^\s*(Bearer|Basic|Token)\s+/i, '').trim()) {
-    keys = [rawAuth.replace(/^\s*(Bearer|Basic|Token)\s+/i, '').trim()];
+
+  // Provider-configured bare-key headers (e.g. inbound_key_headers: ['x-deepseek-key']).
+  if (keys.length === 0 && Array.isArray(provider.inbound_key_headers) && provider.inbound_key_headers.length) {
+    for (const hnameRaw of provider.inbound_key_headers) {
+      const hname = String(hnameRaw).toLowerCase();
+      const v = req.headers[hname];
+      if (v == null) continue;
+      const strV = Array.isArray(v) ? v.join(', ') : String(v);
+      const bare = strV.split('/')
+        .map(s => s.trim().replace(/^\s*(Bearer|Basic|Token)\s+/i, '').trim())
+        .filter(Boolean);
+      if (bare.length) { keys = bare; contributedHeaders[hname] = true; break; }
+    }
   }
-  if (keys.length === 0 && rawKeyHdr.replace(/^\s*(Bearer|Basic|Token)\s+/i, '').trim()) {
-    keys = [rawKeyHdr.replace(/^\s*(Bearer|Basic|Token)\s+/i, '').trim()];
-  }
+
+  // Server-side default (provider.optional_key) — last resort.
   if (keys.length === 0 && provider.optional_key) keys = [provider.optional_key];
-  if (keys.length === 0) {
-    return res.status(401).json({ error: { message: 'No API keys for prefix "' + prefix + '". Send keys as: Authorization: Bearer ' + prefix + '=key1,key2 (or x-api-key: ' + prefix + '=key1,key2 for Anthropic-style clients)', type: 'auth_error' } });
+
+  // ── 4) Round-robin pick (no keys? skip — sandbox handles the 401) ──
+  let key = null;
+  let startIdx = -1;
+  if (keys.length > 0) {
+    if (!(prefix in counters)) counters[prefix] = 0;
+    startIdx = counters[prefix] % keys.length;
+    counters[prefix] = (startIdx + 1) % keys.length;
+    key = String(keys[startIdx]).split('|')[0];
   }
 
-  // ── 4) Round-robin pick ────────────────────────────────────────────────
-  if (!(prefix in counters)) counters[prefix] = 0;
-  const startIdx = counters[prefix] % keys.length;
-  counters[prefix] = (startIdx + 1) % keys.length;
-  const key = keys[startIdx].split('|')[0];
-
-  // ── 5) AbortSignal (hardware-level ceiling; 0/null disables) ─────────
+  // ── 5) AbortSignal — cascade of timeout + client-disconnect ─────────
+  // The bridge's signal is a PARENT: any per-attempt signal a sandbox makes
+  // via ctx.freshSignal(ms) should derive from this (so the user closing the
+  // tab still aborts anything expensive).
   const timeoutMs = provider.default_timeout_ms !== undefined
     ? Number(provider.default_timeout_ms)
     : DEFAULT_TIMEOUT_MS;
+  const clientCloseAC = new AbortController();
+  let clientClosed = false;
+  // Use res.on('close') with a writableEnded gate: Express 4.x fires
+  // req.on('close') TOO EARLY (right after body is parsed, before response
+  // starts), which would wrongly abort healthy requests. res.on('close')
+  // only fires after response completion OR client-disconnect-mid-stream,
+  // and gating on `!res.writableEnded` cleanly distinguishes the two.
+  res.on('close', () => {
+    if (clientClosed || res.writableEnded) return;
+    clientClosed = true;
+    try { clientCloseAC.abort(new Error('client_disconnected')); } catch (_) {}
+  });
   let signal = null;
+  const parts = [];
   if (timeoutMs && timeoutMs > 0) {
-    try { signal = AbortSignal.timeout(timeoutMs); } catch (_) { signal = null; }
+    try { parts.push(AbortSignal.timeout(timeoutMs)); } catch (_) {}
+  }
+  parts.push(clientCloseAC.signal);
+  if (typeof AbortSignal.any === 'function' && parts.length) {
+    try { signal = AbortSignal.any(parts); } catch (_) { signal = parts[parts.length - 1]; }
+  } else if (parts.length) {
+    signal = parts[parts.length - 1];
+  }
+
+  // Per-attempt helper. Pass undefined/null for "no own timeout — just the
+  // cascade off client-close". Pass a number for "fresh deadline, also
+  // cascading off client-close". Used by sandboxes that do retry across
+  // multiple upstream keys and want a clean clock per attempt.
+  function freshSignal(ms) {
+    if (ms === undefined || ms === null) return clientCloseAC.signal;
+    const inner = [];
+    try { inner.push(AbortSignal.timeout(Number(ms))); } catch (_) {}
+    inner.push(clientCloseAC.signal);
+    if (typeof AbortSignal.any === 'function' && inner.length) {
+      try { return AbortSignal.any(inner); } catch (_) {}
+    }
+    return clientCloseAC.signal;
   }
 
   // ── 6) Build ctx ──────────────────────────────────────────────────────
@@ -101,6 +196,18 @@ export async function handleProxy(req, res) {
     proxy: proxyAdminApi,
     log: log.child({ prefix, requestId }),
     signal,
+    freshSignal,                                                                           // see §5 above
+    clientAuth: {                                                                          // inbound auth introspection for sanboxes
+      scanned,                                                                             // { headerName -> parsed compound map }
+      contributedHeaders,                                                                   // { headerName -> true } = headers that yielded keys for THIS prefix (strip these from outbound)
+      headers: req.headers,                                                                 // raw, all of them
+      // Flat strip-list any sandbox can iterate to fully cleanse outbound
+      // headers from inbound-plausible-auth-carrying values. Includes the
+      // AUTH_HEADER_PREFIXES constant set + provider.inbound_key_headers
+      // + headers picked up in the wide compound scan.
+      stripInbound: buildStripInboundList(provider, contributedHeaders),
+    },
+    clientClosed: () => clientClosed,                                                      // read-only leak of disconnect state
   };
 
   // ── 7) Load sandbox (inline code, file slug, OR default passthrough) ─
