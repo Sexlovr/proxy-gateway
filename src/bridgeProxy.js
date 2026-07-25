@@ -44,15 +44,24 @@ export async function handleProxy(req, res) {
   if (provider.cloaked) return res.status(404).json({ error: { message: 'Not found', type: 'proxy_error' } });
 
   // ── 3) Parse `<prefix>=<keys-csv>` or fallback to bare Bearer ─────────
+  // Accept keys from Authorization: Bearer ... OR Anthropic-style headers
+  // (x-api-key / x-anthropic-api-key / anthropic-api-key). Claude Code uses
+  // x-api-key by default; OpenAI-style clients use Authorization: Bearer.
   const rawAuth = req.headers['authorization'] || '';
+  const rawKeyHdr = req.headers['x-api-key'] || req.headers['x-anthropic-api-key'] || req.headers['anthropic-api-key'] || '';
+  const rawAuthAny = rawAuth || rawKeyHdr;
   const compound = parseCompoundKeys(rawAuth);
+  if (rawKeyHdr) Object.assign(compound, parseCompoundKeys(rawKeyHdr));
   let keys = compound[prefix] || [];
   if (keys.length === 0 && rawAuth.replace(/^\s*(Bearer|Basic|Token)\s+/i, '').trim()) {
     keys = [rawAuth.replace(/^\s*(Bearer|Basic|Token)\s+/i, '').trim()];
   }
+  if (keys.length === 0 && rawKeyHdr.replace(/^\s*(Bearer|Basic|Token)\s+/i, '').trim()) {
+    keys = [rawKeyHdr.replace(/^\s*(Bearer|Basic|Token)\s+/i, '').trim()];
+  }
   if (keys.length === 0 && provider.optional_key) keys = [provider.optional_key];
   if (keys.length === 0) {
-    return res.status(401).json({ error: { message: 'No API keys for prefix "' + prefix + '". Send keys as: Authorization: Bearer ' + prefix + '=key1,key2', type: 'auth_error' } });
+    return res.status(401).json({ error: { message: 'No API keys for prefix "' + prefix + '". Send keys as: Authorization: Bearer ' + prefix + '=key1,key2 (or x-api-key: ' + prefix + '=key1,key2 for Anthropic-style clients)', type: 'auth_error' } });
   }
 
   // ── 4) Round-robin pick ────────────────────────────────────────────────
